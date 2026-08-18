@@ -1090,7 +1090,19 @@ class Engine(EngineScoreMixin, EngineBase):
         # Engine.__init__ or CLI entry).
         load_plugins()
 
+        # Needs a tokenizer and a chat template, so it cannot live in the
+        # pipeline; after the plugins, which may register the parser detected.
+        if (
+            server_args.reasoning_parser == "auto"
+            or server_args.tool_call_parser == "auto"
+        ):
+            resolve_auto_parsers(server_args)
+
+        # Not read-only: the LoRA checks normalize adapter paths through late
+        # resolution, which a published config refuses. Hence before publish.
         server_args.check_server_args()
+
+        publish(server_args, role="tokenizer")
 
         # Allocate ports for inter-process communications
         if port_args is None:
@@ -1100,7 +1112,7 @@ class Engine(EngineScoreMixin, EngineBase):
         # Start the engine info bootstrap server if per-rank info is needed.
         engine_info_bootstrap_server = None
         if (
-            server_args.remote_instance_weight_loader_start_seed_via_transfer_engine
+            get_model().remote_instance_weight_loader_start_seed_via_transfer_engine
             and server_args.node_rank == 0
         ):
             bootstrap_port = server_args.engine_info_bootstrap_port
@@ -1113,14 +1125,6 @@ class Engine(EngineScoreMixin, EngineBase):
             engine_info_bootstrap_server = EngineInfoBootstrapServer(
                 host=server_args.host, port=bootstrap_port
             )
-
-        if (
-            server_args.reasoning_parser == "auto"
-            or server_args.tool_call_parser == "auto"
-        ):
-            resolve_auto_parsers(server_args)
-
-        publish(server_args, role="tokenizer")
 
         # Launch daemons (daemon mode only). The handles travel back to the
         # Engine that spawned them; shutdown() reaps from there.
