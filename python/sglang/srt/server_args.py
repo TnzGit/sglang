@@ -4215,9 +4215,12 @@ class ServerArgs:
 
     def _handle_media_url_security(self):
         """Normalize and publish the media URL policy before workers start."""
-        self.allowed_media_domains = configure_media_url_security(
-            self.allowed_media_domains,
-            self.media_url_max_file_size_mb,
+        self._declare(
+            "_handle_media_url_security",
+            allowed_media_domains=configure_media_url_security(
+                self.allowed_media_domains,
+                self.media_url_max_file_size_mb,
+            ),
         )
 
     def _handle_deprecated_args(self):
@@ -4253,7 +4256,10 @@ class ServerArgs:
                 "--enable-flashinfer-allreduce-fusion is deprecated. "
                 "Please use --flashinfer-allreduce-fusion-backend=auto instead."
             )
-            self.flashinfer_allreduce_fusion_backend = "auto"
+            self._declare(
+                "_handle_deprecated_args",
+                flashinfer_allreduce_fusion_backend="auto",
+            )
         self._declare(
             "_handle_deprecated_args",
             enable_flashinfer_allreduce_fusion=False,
@@ -4279,7 +4285,10 @@ class ServerArgs:
                 "version. Use --smg-grpc-mode for the legacy SMG gRPC server, "
                 "or --grpc-port for the native gRPC server."
             )
-            self.smg_grpc_mode = True
+            self._declare(
+                "_handle_deprecated_args",
+                smg_grpc_mode=True,
+            )
 
         # Native gRPC tuning knob is env-only; --grpc-port (CLI) enables the
         # native server, falling back to SGLANG_GRPC_PORT.
@@ -4287,13 +4296,19 @@ class ServerArgs:
 
         grpc_port_env = envs.SGLANG_GRPC_PORT.get()
         if self.grpc_port is None and grpc_port_env is not None:
-            self.grpc_port = grpc_port_env
+            self._declare(
+                "_handle_deprecated_args",
+                grpc_port=grpc_port_env,
+            )
 
         # Legacy SMG defaults its port to --port + 10000. Derive/validate only
         # when gRPC is in use, so HTTP-only high ports don't fail validation.
         legacy_grpc = self.smg_grpc_mode or self.grpc_mode
         if legacy_grpc and self.grpc_port is None:
-            self.grpc_port = self.port + 10000
+            self._declare(
+                "_handle_deprecated_args",
+                grpc_port=self.port + 10000,
+            )
 
         if self.grpc_port is not None:
             if not (1 <= self.grpc_port <= 65535):
@@ -4368,16 +4383,25 @@ class ServerArgs:
 
     def _handle_missing_default_values(self):
         if self.tokenizer_path is None:
-            self.tokenizer_path = self.model_path
+            self._declare(
+                "_handle_missing_default_values",
+                tokenizer_path=self.model_path,
+            )
         if self.served_model_name is None:
             self._declare(
                 "_handle_missing_default_values",
                 served_model_name=self.model_path,
             )
         if self.device is None:
-            self.device = get_device()
+            self._declare(
+                "_handle_missing_default_values",
+                device=get_device(),
+            )
         # strip device index from user if any (e.g. "cuda:0" -> "cuda")
-        self.device = self.device.split(":")[0]
+        self._declare(
+            "_handle_missing_default_values",
+            device=self.device.split(":")[0],
+        )
         if self.random_seed is None:
             self._declare(
                 "_handle_missing_default_values",
@@ -4400,18 +4424,27 @@ class ServerArgs:
                 is not None,
             )
         if self.speculative_draft_model_quantization is None:
-            self.speculative_draft_model_quantization = self.quantization
+            self._declare(
+                "_handle_missing_default_values",
+                speculative_draft_model_quantization=self.quantization,
+            )
 
         # Resolve --quantization unquant before model config validation. Record
         # the explicit opt-out so later auto-detection does not re-enable
         # quantization.
         if self.quantization == "unquant":
-            self.quantization = None
+            self._declare(
+                "_handle_missing_default_values",
+                quantization=None,
+            )
             self._quantization_explicitly_unset = True
         else:
             self._quantization_explicitly_unset = False
         if self.speculative_draft_model_quantization == "unquant":
-            self.speculative_draft_model_quantization = None
+            self._declare(
+                "_handle_missing_default_values",
+                speculative_draft_model_quantization=None,
+            )
 
     def _handle_modelscope_paths(self):
         """Resolve model / tokenizer / speculative-draft paths from the local
@@ -4465,11 +4498,17 @@ class ServerArgs:
                 **({"ignore_patterns": ignore_patterns} if ignore_patterns else {}),
             )
 
-        self.model_path = _resolve_or_download(self.model_path, revision=self.revision)
-        self.tokenizer_path = _resolve_or_download(
-            self.tokenizer_path,
-            ignore_patterns=["*.bin", "*.safetensors"],
-            revision=self.revision,
+        self._declare(
+            "_handle_modelscope_paths",
+            model_path=_resolve_or_download(self.model_path, revision=self.revision),
+        )
+        self._declare(
+            "_handle_modelscope_paths",
+            tokenizer_path=_resolve_or_download(
+                self.tokenizer_path,
+                ignore_patterns=["*.bin", "*.safetensors"],
+                revision=self.revision,
+            ),
         )
         if self.speculative_draft_model_path:
             self.speculative_draft_model_path = _resolve_or_download(
@@ -4480,7 +4519,10 @@ class ServerArgs:
     def _handle_hpu_backends(self):
         if self.device == "hpu":
             self.attention_backend = "torch_native"
-            self.sampling_backend = "pytorch"
+            self._declare(
+                "_handle_hpu_backends",
+                sampling_backend="pytorch",
+            )
 
     def _handle_cpu_backends(self):
         if self.device == "cpu":
@@ -4488,7 +4530,10 @@ class ServerArgs:
                 self.attention_backend = (
                     "torch_native" if is_host_cpu_arm64() else "intel_amx"
                 )
-            self.sampling_backend = "pytorch"
+            self._declare(
+                "_handle_cpu_backends",
+                sampling_backend="pytorch",
+            )
 
     def _handle_npu_backends(self):
         if self.device == "npu":
@@ -4547,7 +4592,10 @@ class ServerArgs:
             "InklingForConditionalGeneration",
             "InklingForConditionalGenerationMTP",
         ):
-            self.cuda_graph_backend_prefill = Backend.FULL
+            self._declare(
+                "_apply_inkling_prefill_cuda_graph_default",
+                cuda_graph_backend_prefill=Backend.FULL,
+            )
 
     def _apply_muse_glimmer_prefill_cuda_graph_max_bs_default(self):
         if (
@@ -4557,7 +4605,10 @@ class ServerArgs:
             return
         arch = self.get_model_config().hf_config.architectures[0]
         if arch in ("MuseGlimmerForCausalLM", "MuseGlimmerForConditionalGeneration"):
-            self.cuda_graph_max_bs_prefill = 512
+            self._declare(
+                "_apply_muse_glimmer_prefill_cuda_graph_max_bs_default",
+                cuda_graph_max_bs_prefill=512,
+            )
 
     def _handle_cuda_graph_config(self):
         from sglang.srt.arg_groups.kimi_k3_hook import disable_kimi_k3_symm_mem
@@ -4663,7 +4714,10 @@ class ServerArgs:
             for key, value in phase_config.items():
                 _set(phase, key, value)
 
-        self.cuda_graph_config = config
+        self._declare(
+            "_parse_cuda_graph_config",
+            cuda_graph_config=config,
+        )
         self._cuda_graph_config_locked = locked
 
     def _apply_cuda_graph_compatibility(self):
@@ -5023,12 +5077,17 @@ class ServerArgs:
             # Reuse decode_cuda_graph_config.bs for cpu graph and use torch_compile_max_bs for cpu graph batch size limit,
             # as cpu graph is based on torch.compile
             if decode_cuda_graph_config.bs is not None:
-                self.torch_compile_max_bs = max(decode_cuda_graph_config.bs)
+                self._declare(
+                    "_handle_gpu_memory_settings",
+                    torch_compile_max_bs=max(decode_cuda_graph_config.bs),
+                )
             else:
                 # If decode_cuda_graph_config.bs is not set, we will preferentially use torch_compile_max_bs
                 # to generate decode_cuda_graph_config.bs
-                self.torch_compile_max_bs = (
-                    self.torch_compile_max_bs or decode_cuda_graph_config.max_bs
+                self._declare(
+                    "_handle_gpu_memory_settings",
+                    torch_compile_max_bs=self.torch_compile_max_bs
+                    or decode_cuda_graph_config.max_bs,
                 )
                 decode_cuda_graph_config.bs = self._generate_cpu_graph_batch_sizes()
 
@@ -5097,10 +5156,13 @@ class ServerArgs:
                 # Reserve headroom for DeepEP all-to-all buffers on top of the floor.
                 reserved_mem += self.reserve_for_deepep_a2a_mb()
 
-            self.mem_fraction_static = (
-                round((gpu_mem - reserved_mem) / gpu_mem, 3)
-                if gpu_mem is not None
-                else 0.88
+            self._declare(
+                "_handle_gpu_memory_settings",
+                mem_fraction_static=(
+                    round((gpu_mem - reserved_mem) / gpu_mem, 3)
+                    if gpu_mem is not None
+                    else 0.88
+                ),
             )
 
             # Multimodal models need more memory for the image processing,
@@ -6183,7 +6245,10 @@ class ServerArgs:
         # AMD platforms backends
         if resolved_view(self).attention_backend == "aiter":
             if model_config.context_len > 8192:
-                self.mem_fraction_static *= 0.85
+                self._declare(
+                    "_handle_attention_backend_compatibility",
+                    mem_fraction_static=self.mem_fraction_static * 0.85,
+                )
 
         # Other platforms backends
         run_post_process_pass(self, _attention_backend_platform_fallbacks)
@@ -6599,7 +6664,10 @@ class ServerArgs:
                     "float32 (the closed-loop exact fold keeps the SSM checkpoint "
                     "bit-identical to the recurrent baseline)."
                 )
-                self.mamba_ssm_dtype = "float32"
+                self._declare(
+                    "_handle_linear_attn_backend",
+                    mamba_ssm_dtype="float32",
+                )
             elif self.mamba_ssm_dtype != "float32":
                 logger.warning(
                     "--enable-linear-replayssm-spec with --mamba-ssm-dtype=%s: the "
@@ -7775,8 +7843,14 @@ class ServerArgs:
         if resolved is not None:
             logger.info("Resolved GGUF %s -> %s", self.model_path, resolved)
             if self.tokenizer_path == self.model_path:
-                self.tokenizer_path = resolved
-            self.model_path = resolved
+                self._declare(
+                    "_resolve_hf_gguf_model_path",
+                    tokenizer_path=resolved,
+                )
+            self._declare(
+                "_resolve_hf_gguf_model_path",
+                model_path=resolved,
+            )
 
         # A speculative draft can be a .gguf too, and it is loaded by path, so it
         # needs the same Hub-reference resolution as the target.
@@ -7806,18 +7880,30 @@ class ServerArgs:
         if (
             self.load_format == "auto" or self.load_format == "gguf"
         ) and check_gguf_file(self.model_path):
-            self.load_format = "gguf"
+            self._declare(
+                "_handle_load_format",
+                load_format="gguf",
+            )
 
         if self.load_format == "auto" and self._is_mistral_native_format():
-            self.load_format = "mistral"
+            self._declare(
+                "_handle_load_format",
+                load_format="mistral",
+            )
             logger.info(
                 "Detected Mistral native format checkpoint, setting load_format='mistral'"
             )
 
         if is_runai_obj_uri(self.model_path):
-            self.load_format = "runai_streamer"
+            self._declare(
+                "_handle_load_format",
+                load_format="runai_streamer",
+            )
         elif is_remote_url(self.model_path):
-            self.load_format = "remote"
+            self._declare(
+                "_handle_load_format",
+                load_format="remote",
+            )
 
         if (
             self.speculative_draft_model_path is not None
@@ -7840,7 +7926,10 @@ class ServerArgs:
                 logger.warning(
                     "Fallback load_format to 'auto' due to incomplete remote instance weight loader settings."
                 )
-                self.load_format = "auto"
+                self._declare(
+                    "_handle_load_format",
+                    load_format="auto",
+                )
             elif (
                 self.remote_instance_weight_loader_send_weights_group_ports is None
                 and self.remote_instance_weight_loader_backend == "nccl"
@@ -7848,7 +7937,10 @@ class ServerArgs:
                 logger.warning(
                     "Fallback load_format to 'auto' due to incomplete remote instance weight loader NCCL group ports settings."
                 )
-                self.load_format = "auto"
+                self._declare(
+                    "_handle_load_format",
+                    load_format="auto",
+                )
             elif (
                 self.remote_instance_weight_loader_backend == "transfer_engine"
                 and not self.validate_transfer_engine()
@@ -7856,7 +7948,10 @@ class ServerArgs:
                 logger.warning(
                     "Fallback load_format to 'auto' due to 'transfer_engine' backend is not supported."
                 )
-                self.load_format = "auto"
+                self._declare(
+                    "_handle_load_format",
+                    load_format="auto",
+                )
 
         # Check whether TransferEngine can be used when users want to start seed service that supports TransferEngine backend.
         if self.remote_instance_weight_loader_start_seed_via_transfer_engine:
@@ -8455,7 +8550,10 @@ class ServerArgs:
             logger.warning(
                 "Enable deterministic inference because of rl_on_policy_target."
             )
-            self.enable_deterministic_inference = True
+            self._declare(
+                "_handle_deterministic_inference",
+                enable_deterministic_inference=True,
+            )
 
             # For VLM
             envs.SGLANG_VLM_CACHE_SIZE_MB.set(0)
@@ -8467,7 +8565,10 @@ class ServerArgs:
                 logger.warning(
                     "Disable --enable-aiter-allreduce-fusion because deterministic inference is enabled."
                 )
-                self.enable_aiter_allreduce_fusion = False
+                self._declare(
+                    "_handle_deterministic_inference",
+                    enable_aiter_allreduce_fusion=False,
+                )
 
             # Moved to the resolution pipeline (arg_groups/overrides.py:
             # _deterministic_allreduce_fusion_disable), invoked here at its
@@ -8889,8 +8990,11 @@ class ServerArgs:
         # Validate limit_mm_per_prompt modalities
         if self.limit_mm_data_per_request:
             if isinstance(self.limit_mm_data_per_request, str):
-                self.limit_mm_data_per_request = json.loads(
-                    self.limit_mm_data_per_request
+                self._declare(
+                    "_handle_other_validations",
+                    limit_mm_data_per_request=json.loads(
+                        self.limit_mm_data_per_request
+                    ),
                 )
 
             if isinstance(self.limit_mm_data_per_request, dict):
@@ -8905,8 +9009,11 @@ class ServerArgs:
         # Validate preferred_sampling_params
         if self.preferred_sampling_params:
             if isinstance(self.preferred_sampling_params, str):
-                self.preferred_sampling_params = json.loads(
-                    self.preferred_sampling_params
+                self._declare(
+                    "_handle_other_validations",
+                    preferred_sampling_params=json.loads(
+                        self.preferred_sampling_params
+                    ),
                 )
 
             # Validate preferred_sampling_params doesn't use tokenizer-dependent features
@@ -9921,8 +10028,9 @@ class ServerArgs:
         final_overall_factor = (
             base_mem_fraction_reduction_ratio * dynamic_adjustment_factor
         )
-        self.mem_fraction_static = (
-            original_server_arg_mem_fraction * final_overall_factor
+        self._declare(
+            "adjust_mem_fraction_for_vlm",
+            mem_fraction_static=original_server_arg_mem_fraction * final_overall_factor,
         )
 
     def validate_transfer_engine(self):
