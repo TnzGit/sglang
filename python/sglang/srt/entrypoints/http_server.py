@@ -484,6 +484,7 @@ from sglang.srt.entrypoints.elastic_ep import router as elastic_ep_router
 from sglang.srt.runtime_context import (
     get_disagg,
     get_exec,
+    get_lora,
     get_model,
     get_parallel,
     get_serving,
@@ -744,9 +745,9 @@ async def model_info():
         # Manager-owned, and moved by a weight update alongside `model_path`:
         # this is where a client reads the identity the server answers under.
         "served_model_name": _global_state.tokenizer_manager.served_model_name,
-        "tokenizer_path": _global_state.tokenizer_manager.server_args.tokenizer_path,
+        "tokenizer_path": get_serving().tokenizer_path,
         "is_generation": _global_state.tokenizer_manager.is_generation,
-        "preferred_sampling_params": _global_state.tokenizer_manager.server_args.preferred_sampling_params,
+        "preferred_sampling_params": get_serving().preferred_sampling_params,
         "weight_version": _global_state.tokenizer_manager.config_value(
             "weight_version"
         ),
@@ -1857,7 +1858,7 @@ async def available_models():
         )
 
     # Add loaded LoRA adapters
-    if _global_state.tokenizer_manager.server_args.enable_lora:
+    if get_lora().enable_lora:
         lora_registry = _global_state.tokenizer_manager.lora_registry
         for _, lora_ref in lora_registry.get_all_adapters().items():
             model_cards.append(
