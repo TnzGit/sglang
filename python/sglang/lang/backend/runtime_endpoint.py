@@ -455,7 +455,9 @@ class Runtime:
         from sglang.srt.utils.hf_transformers_utils import get_tokenizer
 
         return get_tokenizer(
-            self.server_args.tokenizer_path,
+            # This record stays raw (the spawned server resolves its own), so
+            # fall back like resolution does -- minus its ModelScope rewrite.
+            self.server_args.tokenizer_path or self.server_args.model_path,
             tokenizer_mode=self.server_args.tokenizer_mode,
             trust_remote_code=self.server_args.trust_remote_code,
             revision=self.server_args.revision,

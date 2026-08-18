@@ -315,5 +315,7 @@ if __name__ == "__main__":
     parser.add_argument("--is-multimodal", action="store_true", default=False)
     args = parser.parse_args()
     server_args: ServerArgs = ServerArgs.from_cli_args(args)
+    # Construction no longer resolves; this program reads resolved values below.
+    server_args.resolve_once()
 
     main(args, server_args)

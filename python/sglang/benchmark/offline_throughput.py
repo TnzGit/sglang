@@ -569,6 +569,8 @@ def cli_main():
                 raise e
 
     server_args = ServerArgs.from_cli_args(args)
+    # Construction no longer resolves; this program reads resolved values below.
+    server_args.resolve_once()
     bench_args = BenchArgs.from_cli_args(args)
 
     logging.basicConfig(

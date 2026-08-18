@@ -71,4 +71,6 @@ if __name__ == "__main__":
     ]
     args = parser.parse_args(args=args)
     server_args = ServerArgs.from_cli_args(args)
+    # Construction no longer resolves; this program reads resolved values below.
+    server_args.resolve_once()
     token_in_out_example(server_args)
