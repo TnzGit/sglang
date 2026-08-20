@@ -47,8 +47,7 @@ from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
     sharded_weight_loader,
 )
-from sglang.srt.runtime_context import get_parallel
-from sglang.srt.server_args import get_global_server_args
+from sglang.srt.runtime_context import get_exec, get_parallel
 from sglang.srt.utils import add_prefix, set_weight_attrs
 from sglang.utils import get_exception_traceback
 
@@ -75,7 +74,7 @@ def granite_layer_attn_params(
 
 def build_attention_sinks(num_heads: int) -> nn.Parameter:
     # trtllm_mha requires float32 sinks, other backends use bfloat16.
-    attn_backend = get_global_server_args().attention_backend
+    attn_backend = get_exec().kernel.attention_backend
     sinks_dtype = torch.float32 if attn_backend == "trtllm_mha" else torch.bfloat16
     sinks = nn.Parameter(torch.empty(num_heads, dtype=sinks_dtype), requires_grad=False)
     set_weight_attrs(sinks, {"weight_loader": sharded_weight_loader(0)})

@@ -28,10 +28,13 @@ _RATCHETS = [
     # Down to the shim definition itself; every call-site now goes through
     # runtime_context.get_server_args().
     ("get_global_server_args", r"\bget_global_server_args\s*\(", 1),
+    # Down to the two shim definitions: the constructors that used to call them
+    # publish through `ensure_published`, which does not re-project over a
+    # process that already published this record.
     (
         "set_global_server_args_for_*",
         r"\bset_global_server_args_for_(?:scheduler|tokenizer)\s*\(",
-        4,
+        2,
     ),
 ]
 
