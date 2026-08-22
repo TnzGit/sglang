@@ -842,6 +842,10 @@ def _decode_grouped_att_m_fwd(
         # https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/compiler.py
         extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
         num_stages = 1
+    elif torch.cuda.get_device_capability()[0] <= 7:
+        # Turing/Volta (cc 7.x): 64 KB smem. With BLOCK=16 the 2-stage
+        # pipeline still needs ~68 KB at D=576 (512+64 split dims).
+        num_stages = 1
 
     if tune_mla:
         # num_warps reorders the fp32 accumulation, so whoever declined the batch-wide
