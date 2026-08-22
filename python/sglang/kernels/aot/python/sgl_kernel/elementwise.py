@@ -10,6 +10,17 @@ try:
 except ImportError:
     _has_flashinfer = False
 
+# Turing (SM75): flashinfer's norm JIT path has no validated SM75 backend and
+# its tvm_ffi signature mismatches at runtime there. Route norm ops to the
+# in-house AOT kernels (built with SGL_KERNEL_ENABLE_SM75) instead.
+try:
+    _MAJOR, _MINOR = torch.cuda.get_device_capability()
+    _IS_PRE_SM80 = (_MAJOR, _MINOR) < (8, 0)
+except Exception:
+    _IS_PRE_SM80 = False
+if _IS_PRE_SM80:
+    _has_flashinfer = False
+
 _FLASHINFER_NORM_SUPPORTED_DTYPES = {torch.float16, torch.bfloat16}
 
 
