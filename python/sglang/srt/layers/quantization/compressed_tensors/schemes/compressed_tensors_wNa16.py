@@ -92,8 +92,10 @@ class CompressedTensorsWNA16(CompressedTensorsLinearScheme):
 
     @classmethod
     def get_min_capability(cls) -> int:
-        # ampere and up
-        return 80
+        # Turing (75): the WNA16 repack/gemm route lands in
+        # gptq_marlin_repack / gptq_marlin_gemm, which bridge to the locally
+        # installed vLLM build on pre-sm80 devices (sm75-validated).
+        return 75
 
     def create_weights(self, layer: torch.nn.Module, output_size: int,
                        input_size: int, output_partition_sizes: list[int],
