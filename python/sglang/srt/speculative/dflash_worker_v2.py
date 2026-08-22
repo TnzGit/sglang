@@ -1,4 +1,5 @@
 import logging
+import os as _os
 import math
 from dataclasses import replace
 from typing import List, Optional, Tuple
@@ -389,7 +390,10 @@ class DFlashWorkerV2(BaseSpecWorker):
 
         supports_gpu_triton = is_cuda() or is_hip()
         self._use_triton_prepare_block = supports_gpu_triton
-        self._use_triton_accept_bonus = supports_gpu_triton
+        self._use_triton_accept_bonus = supports_gpu_triton and not _os.getenv(
+            "SGLANG_TURING_DFLASH_EAGER_ACCEPT", ""
+        )
+        self._dbg_steps = 0
         # The legacy compact-rebuild path host-syncs twice per step (masked
         # gather's implicit nonzero D2H + lengths.max().item()); keep it only
         # for platforms without GPU triton.
@@ -2047,6 +2051,14 @@ class DFlashWorkerV2(BaseSpecWorker):
                         out_tokens,
                         new_seq_lens,
                     ) = self._next_accept_bonus_buffers(bs)
+                    if _os.getenv("SGLANG_TURING_DFLASH_DEBUG") and self._dbg_steps < 2:
+                        self._dbg_steps += 1
+                        logger.warning(
+                            "DFLASHDBG step=%d candidates[0]=%s target_top1[0]=%s",
+                            self._dbg_steps,
+                            candidates[0].tolist(),
+                            target_predict[0].tolist(),
+                        )
                     _compute_dflash_accept_bonus_triton_unchecked(
                         candidates=candidates,
                         target_top1=target_predict,
