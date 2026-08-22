@@ -41,8 +41,31 @@ def configure_kv_cache_dtype(
             isinstance(kv_cache_quant_algo, str)
             and kv_cache_quant_algo.upper() == "FP8"
         ):
-            kv_cache_dtype = fp8_dtype if _is_hip else torch.float8_e4m3fn
-            resolved_kv_cache_dtype = TORCH_DTYPE_TO_KV_CACHE_STR[kv_cache_dtype]
+            # Pre-sm80 devices have no FP8 hardware path and Triton there
+            # cannot compile e4nv-pointer kernels; keep KV in the activation
+            # dtype instead of honoring the checkpoint's FP8 KV hint.
+            pre_sm80 = False
+            if not _is_hip:
+                try:
+                    import torch as _torch  # noqa: PLC0415
+
+                    if (
+                        _torch.cuda.is_available()
+                        and _torch.cuda.get_device_capability()[0] < 8
+                    ):
+                        pre_sm80 = True
+                except Exception:
+                    pass
+            if pre_sm80:
+                logger.warning(
+                    "Checkpoint requests FP8 KV cache, but pre-sm80 devices "
+                    "cannot run FP8 kernels; keeping the KV cache in the "
+                    "activation dtype."
+                )
+                kv_cache_dtype = model_dtype
+            else:
+                kv_cache_dtype = fp8_dtype if _is_hip else torch.float8_e4m3fn
+                resolved_kv_cache_dtype = TORCH_DTYPE_TO_KV_CACHE_STR[kv_cache_dtype]
         else:
             kv_cache_dtype = model_dtype
     elif server_args_kv_cache_dtype == "fp8_e5m2":
