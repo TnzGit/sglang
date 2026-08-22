@@ -47,6 +47,7 @@ from sglang.srt.layers.quantization.compressed_tensors.schemes import (
     CompressedTensorsW4A4Nvfp4MoE,
     CompressedTensorsW4AFP8MoE,
     CompressedTensorsW8A8Fp8,
+    CompressedTensorsW8A8Fp8Marlin,
     CompressedTensorsW8A8Fp8MoE,
     CompressedTensorsW8A8Int8,
     CompressedTensorsW8A16Fp8,
@@ -713,6 +714,22 @@ class CompressedTensorsConfig(QuantizationConfig):
                     )
 
             if self._is_fp8_w8a8(weight_quant, input_quant):
+                # Pre-sm80: FP8 weights through the Marlin dequant-in-kernel
+                # bridge; activations stay bf16/fp16 (no FP8 hardware).
+                from sglang.kernels.ops.quantization._turing_marlin_bridge import (
+                    pre_sm80,
+                )
+
+                if pre_sm80() and weight_quant.strategy in (
+                    QuantizationStrategy.CHANNEL,
+                    QuantizationStrategy.TENSOR,
+                ):
+                    logger.info_once(
+                        "Using CompressedTensorsW8A8Fp8Marlin (pre-sm80 bridge)"
+                    )
+                    return CompressedTensorsW8A8Fp8Marlin(
+                        weight_quant=weight_quant
+                    )
                 is_fp8_w8a8_supported = self._check_scheme_supported(
                     CompressedTensorsW8A8Fp8.get_min_capability(), error=False
                 )

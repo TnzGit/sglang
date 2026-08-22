@@ -130,3 +130,63 @@ def turing_awq_marlin_repack(
     """awq_marlin_repack bridge (AWQ zero-point layout -> marlin)."""
     ops = require_vllm_ops()
     return ops.awq_marlin_repack(b_q_weight, size_k, size_n, num_bits)
+
+
+def turing_prepare_fp8_weight_for_marlin(
+    weight_f16: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Quantize an fp16 [N, K] weight to Marlin's FP8-weight layout.
+
+    Uses per-output-row FP8 scales (group_size=-1), matching the
+    compressed-tensors "channel" strategy of W8A8-FP8 checkpoints.
+    Returns (marlin_qweight int32, marlin_scales).
+    """
+    ops = require_vllm_ops()
+    from vllm.model_executor.layers.quantization.utils.marlin_utils_fp8 import (
+        marlin_quant_fp8_torch,  # noqa: PLC0415
+    )
+
+    _, marlin_qweight, marlin_scales = marlin_quant_fp8_torch(
+        weight_f16, group_size=-1, input_dtype=None
+    )
+    return marlin_qweight, marlin_scales
+
+
+def turing_fp8_marlin_gemm(
+    a: torch.Tensor,
+    c: torch.Tensor | None,
+    b_q_weight: torch.Tensor,
+    b_scales: torch.Tensor,
+    workspace: torch.Tensor,
+    size_m: int,
+    size_n: int,
+    size_k: int,
+    use_fp32_reduce: bool = True,
+) -> torch.Tensor:
+    """FP8-weight GEMM bridge: bf16/fp16 activations against e4m3 weights."""
+    import vllm.scalar_type as vst  # noqa: PLC0415
+
+    ops = require_vllm_ops()
+    if c is None:
+        c = torch.empty((size_m, size_n), dtype=a.dtype, device=a.device)
+    return ops.marlin_gemm(
+        a,
+        c,
+        b_q_weight,
+        None,  # b_bias
+        b_scales,
+        None,  # a_scales (activations stay bf16/fp16 on this path)
+        None,  # global_scale (weights are pre-scaled at repack time)
+        None,  # b_zeros
+        None,  # g_idx
+        None,  # perm
+        workspace,
+        vst.scalar_types.float8_e4m3fn,
+        size_m,
+        size_n,
+        size_k,
+        is_k_full=True,
+        use_atomic_add=False,
+        use_fp32_reduce=use_fp32_reduce,
+        is_zp_float=False,
+    )
