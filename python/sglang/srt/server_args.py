@@ -9667,6 +9667,10 @@ class ServerArgs:
         vision_config = getattr(model_config.hf_config, "vision_config", None)
         if vision_config is None:
             return
+        if not getattr(model_config, "is_multimodal", True):
+            # Multimodal disabled (e.g. pre-sm80 default): the visual tower
+            # is not served, so don't shrink the fraction for it.
+            return
 
         # roughly reduce the mem_fraction_static base on params of Vit
         original_server_arg_mem_fraction = self.mem_fraction_static

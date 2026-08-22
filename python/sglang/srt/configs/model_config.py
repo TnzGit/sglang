@@ -381,7 +381,26 @@ class ModelConfig:
                     "(likely a text-only MiMoV2 variant)."
                 )
             else:
-                enable_multimodal = True
+                # Pre-sm80 devices run fp16 compute with no bf16 hardware;
+                # VL towers are stored bf16 and unused by text-only serving,
+                # so default multimodal off there (--enable-multimodal to
+                # re-enable explicitly).
+                try:
+                    import torch as _torch  # noqa: PLC0415
+
+                    if (
+                        _torch.cuda.is_available()
+                        and _torch.cuda.get_device_capability()[0] < 8
+                    ):
+                        enable_multimodal = False
+                        logger.info(
+                            "Multimodal is disabled by default on pre-sm80 "
+                            "devices. To enable it, set --enable-multimodal."
+                        )
+                    else:
+                        enable_multimodal = True
+                except Exception:
+                    enable_multimodal = True
 
         # Config draft model
         self._config_draft_model()
