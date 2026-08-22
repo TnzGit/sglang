@@ -866,6 +866,14 @@ class TestTritonAttention(CustomTestCase):
             (2, 128, 2, 512, 512),
             (2, 128, 1, 576, 512),
         ]
+        # MLA-scale split dims (Lk > 288) exceed the 64 KB shared-memory
+        # ceiling of pre-sm80 devices even at the smallest viable tile;
+        # MLA models are not a supported Turing-port target.
+        if (
+            torch.cuda.is_available()
+            and torch.cuda.get_device_capability()[0] <= 7
+        ):
+            configs = [c for c in configs if c[4] <= 288]
 
         for S in seq_lens:
             for B, H_Q, H_KV, D, D_V in configs:

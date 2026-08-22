@@ -808,10 +808,10 @@ def _decode_grouped_att_m_fwd(
     # Turing/Volta (cc 7.x): 64 KB shared-memory limit; halve the tile.
     if (not _is_hip) and torch.cuda.get_device_capability()[0] <= 7:
         BLOCK = 16
-        # Large split-dim families (e.g. MLA 512+64) exceed 64 KB even at
-        # BLOCK=16 once Q/K/V tiles are resident; drop to the HIP-style 8.
-        if Lk > 288:
-            BLOCK = 8
+        # NOTE: MLA-scale split dims (Lk > 288, e.g. 512+64) still exceed the
+        # 64 KB ceiling at BLOCK=16 even with num_stages=1 (~68 KB required).
+        # Those configs raise OutOfResources; MLA models are not a supported
+        # target of the Turing port.
 
     # [TODO] work around shmem limit on MI3xx
     if _is_hip and Lk >= 576:
