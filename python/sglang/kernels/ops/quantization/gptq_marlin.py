@@ -6,6 +6,10 @@ import torch
 
 from sglang.kernels.jit.utils import cache_once, load_jit, make_cpp_args
 from sglang.kernels.kernel_api_logging import debug_kernel_api
+from sglang.kernels.ops.quantization._turing_marlin_bridge import (
+    pre_sm80,
+    turing_marlin_gemm,
+)
 
 if TYPE_CHECKING:
     from sgl_kernel.scalar_type import ScalarType
@@ -52,6 +56,29 @@ def gptq_marlin_gemm(
     use_fp32_reduce: bool = False,
     is_zp_float: bool = False,
 ) -> torch.Tensor:
+    # Turing (cc <= 7): delegate to the locally installed vLLM build whose
+    # compiled marlin kernels cover sm75. The JIT kernel here targets sm80+.
+    if pre_sm80():
+        return turing_marlin_gemm(
+            a,
+            c,
+            b_q_weight,
+            b_scales,
+            global_scale,
+            b_zeros,
+            g_idx,
+            perm,
+            workspace,
+            b_q_type,
+            size_m,
+            size_n,
+            size_k,
+            is_k_full,
+            use_atomic_add,
+            use_fp32_reduce,
+            is_zp_float,
+        )
+
     device = a.device
 
     # Allocate output if not provided

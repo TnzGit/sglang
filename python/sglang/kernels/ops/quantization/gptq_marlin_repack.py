@@ -6,6 +6,10 @@ import torch
 
 from sglang.kernels.jit.utils import cache_once, load_jit
 from sglang.kernels.kernel_api_logging import debug_kernel_api
+from sglang.kernels.ops.quantization._turing_marlin_bridge import (
+    pre_sm80,
+    turing_gptq_marlin_repack,
+)
 
 if TYPE_CHECKING:
     from tvm_ffi.module import Module
@@ -31,6 +35,10 @@ def gptq_marlin_repack(
     size_n: int,
     num_bits: int,
 ) -> torch.Tensor:
+    # Turing (cc <= 7): delegate to the locally installed vLLM build.
+    if pre_sm80():
+        return turing_gptq_marlin_repack(b_q_weight, perm, size_k, size_n, num_bits)
+
     pack_factor = 32 // num_bits
 
     # Allocate output tensor
