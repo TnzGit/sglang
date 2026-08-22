@@ -608,6 +608,11 @@ class DFlashDraftModel(nn.Module):
                     "DFlashDraftModel requires `input_embeds` (use the target "
                     "embedding)."
                 )
+        # Pre-sm80 port: the target runs fp16 while a draft embedding table
+        # can still resolve bf16 (its config declares bfloat16). Align the
+        # entry activations with the decoder weights to avoid mixed-dtype
+        # matmul failures.
+        input_embeds = input_embeds.to(self.norm.weight.dtype)
         hidden_states = input_embeds
         residual: Optional[torch.Tensor] = None
 
