@@ -1455,7 +1455,7 @@ def pre_capture_activation_reserve_mb(gpu_mem: float | None) -> float:
     elif schedule.chunked_prefill_size > 0:
         # Pre-sm80 (Turing): no bf16 hardware path, typically 22 GB cards —
         # halve the floor so a usable KV budget remains on those GPUs.
-        min_activation_tokens = 1024
+        min_activation_tokens = 512
         try:
             import torch  # noqa: PLC0415
 
