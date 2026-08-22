@@ -354,7 +354,9 @@ class GPTQMarlinConfig(QuantizationConfig):
 
     @classmethod
     def get_min_capability(cls) -> int:
-        return 80
+        # Turing (75): gptq-marlin runs via the pre-sm80 bridge to the local
+        # vLLM build (see kernels/ops/quantization/_turing_marlin_bridge.py).
+        return 75
 
     @classmethod
     def get_config_filenames(cls) -> List[str]:

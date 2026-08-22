@@ -16,6 +16,8 @@ fix is porting the Turing MMA sections into sglang's JIT marlin sources.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import torch
 
 
