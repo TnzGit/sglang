@@ -135,7 +135,12 @@ def _get_block_sizes_for_extend_attention(Lq: int, Lv: int):
                     BLOCK_M, BLOCK_N = (32, 64)
         else:
             # Older architectures
-            BLOCK_M, BLOCK_N = (64, 64) if Lq <= 128 else (32, 32)
+            if _is_cuda and CUDA_CAPABILITY[0] <= 7:
+                # Turing/Volta (cc 7.x): 64 KB shared-memory ceiling; the
+                # default 64-wide tiles overflow it at larger head dims.
+                BLOCK_M, BLOCK_N = (32, 32)
+            else:
+                BLOCK_M, BLOCK_N = (64, 64) if Lq <= 128 else (32, 32)
 
         num_warps = 4 if Lq <= 64 else 8
 

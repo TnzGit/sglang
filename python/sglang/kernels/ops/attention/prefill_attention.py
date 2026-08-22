@@ -179,8 +179,12 @@ def context_attention_fwd(
     """
     if (_is_cuda or _is_hip) and CUDA_CAPABILITY[0] > 8:
         BLOCK = 128
-    else:
+    elif (_is_cuda or _is_hip) and CUDA_CAPABILITY[0] == 8:
         BLOCK = 64
+    else:
+        # Turing/Volta (cc 7.x): 64 KB shared-memory ceiling. Even with
+        # num_stages=1, 64-wide K/V tiles overflow it at larger head dims.
+        BLOCK = 32
 
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
 

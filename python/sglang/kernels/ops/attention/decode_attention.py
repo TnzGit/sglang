@@ -458,6 +458,12 @@ def _decode_att_m_fwd(
     # [TODO] work around SGPR limit on MI3xx
     if _is_hip:
         BLOCK = 8
+    elif _is_cuda and torch.cuda.get_device_capability()[0] <= 7:
+        # Turing/Volta (cc 7.x): 64 KB shared-memory limit. 64-wide K/V
+        # tiles at head_dim 256 with the 2-stage pipeline need ~128 KB;
+        # 16 keeps every supported head dim within budget. Throughput
+        # retuning for this port happens later.
+        BLOCK = 16
     MAX_KV_SPLITS = max_kv_splits
     Lk = k_buffer.shape[-1]
     Lv = v_buffer.shape[-1]
@@ -797,6 +803,10 @@ def _decode_grouped_att_m_fwd(
     BLOCK = 32
     Lk = k_buffer.shape[-1]
     Lv = v_buffer.shape[-1]
+
+    # Turing/Volta (cc 7.x): 64 KB shared-memory limit; halve the tile.
+    if _is_cuda and torch.cuda.get_device_capability()[0] <= 7:
+        BLOCK = 16
 
     # [TODO] work around shmem limit on MI3xx
     if _is_hip and Lk >= 576:
