@@ -43,6 +43,7 @@ from sglang.srt.layers.quantization.compressed_tensors.schemes import (
     CompressedTensorsMoEScheme,
     CompressedTensorsMxInt4MoE,
     CompressedTensorsW4A4Fp4,
+    CompressedTensorsW4A4Fp4Marlin,
     CompressedTensorsW4A4Nvfp4MoE,
     CompressedTensorsW4AFP8MoE,
     CompressedTensorsW8A8Fp8,
@@ -689,6 +690,18 @@ class CompressedTensorsConfig(QuantizationConfig):
 
         if is_activation_quantization_format(quant_format):
             if self._is_fp4a4_nvfp4(weight_quant, input_quant):
+                # Pre-sm80: serve NVFP4 through the Marlin dequant-in-kernel
+                # path (fp4 weights, fp16/bf16 activations) via the local
+                # vLLM bridge; native FP4 GEMM needs SM100+.
+                from sglang.kernels.ops.quantization._turing_marlin_bridge import (
+                    pre_sm80,
+                )
+
+                if pre_sm80():
+                    logger.info_once(
+                        "Using CompressedTensorsW4A4Fp4Marlin (pre-sm80 bridge)"
+                    )
+                    return CompressedTensorsW4A4Fp4Marlin()
                 is_fp4a4_nvfp4_supported = self._check_scheme_supported(
                     CompressedTensorsW4A4Fp4.get_min_capability(), error=False
                 )
