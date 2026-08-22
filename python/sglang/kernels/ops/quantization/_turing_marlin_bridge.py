@@ -78,6 +78,14 @@ def turing_marlin_gemm(
     ops = require_vllm_ops()
     if c is None:
         c = torch.empty((size_m, size_n), dtype=a.dtype, device=a.device)
+    # vLLM's compiled kernel requires the NVFP4 global scale in fp32; sglang
+    # helpers may keep it in the activation dtype.
+    if (
+        global_scale is not None
+        and global_scale.numel() > 0
+        and global_scale.dtype != torch.float32
+    ):
+        global_scale = global_scale.to(torch.float32)
     return ops.marlin_gemm(
         a,
         c,
