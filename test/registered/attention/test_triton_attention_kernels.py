@@ -631,6 +631,15 @@ class TestTritonAttention(CustomTestCase):
         )
 
     def test_extend_attention_sliding_window(self):
+        if (
+            torch.cuda.is_available()
+            and torch.cuda.get_device_capability()[0] <= 7
+            and torch.cuda.get_device_properties(0).total_memory < 24 * 1024**3
+        ):
+            self.skipTest(
+                "reference attention for this config needs >21 GB; "
+                "exceeds 22 GB-class Turing cards"
+            )
         window_sizes = [-1, 127]
         for window_size in window_sizes:
             self._test_extend_attention_sliding_window_once(
@@ -870,6 +879,14 @@ class TestTritonAttention(CustomTestCase):
         sizes, batch * num_head * max_kv_splits * head_dim can exceed 2**31 and
         int32 cur_batch * stride_mid_ob overflows into a GPU memory fault.
         """
+        if (
+            torch.cuda.is_available()
+            and torch.cuda.get_device_capability()[0] <= 7
+        ):
+            self.skipTest(
+                "uses bfloat16 and >20 GB of activations; neither fits "
+                "22 GB-class Turing cards (no bf16 hardware)"
+            )
         device = get_device()
         dtype = torch.bfloat16
         B = 64
@@ -923,6 +940,14 @@ class TestTritonAttention(CustomTestCase):
         """Test that unified kernel produces same results as 2-stage kernel."""
         dtype = torch.bfloat16
         device = get_device()
+        if (
+            torch.cuda.is_available()
+            and torch.cuda.get_device_capability()[0] <= 7
+        ):
+            self.skipTest(
+                "bfloat16 has no hardware support on pre-sm80 devices; "
+                "sglang forces fp16 there"
+            )
 
         b_seq_len_prefix = torch.randint(
             1, N_CTX // 2, (B,), dtype=torch.int32, device=device
