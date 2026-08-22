@@ -549,11 +549,16 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         # Qwen3.5 has separate in_proj_b and in_proj_a weights in the
         # checkpoint, which are loaded into the fused in_proj_ba parameter
         # via stacked_params_mapping with shard_id 0 and 1 respectively.
+        #
+        # The ba projection stays unquantized: checkpoints store it as plain
+        # bf16/fp16 weights (no qweight/qzeros/scales), and its output dim
+        # (2 x num_v_heads) is far below any weight-only kernel's tile
+        # granularity (marlin repack requires n % 64 == 0).
         return MergedColumnParallelLinear(
             input_size=hidden_size,
             output_sizes=[num_v_heads, num_v_heads],
             bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=prefix,
             tp_rank=tp_rank,
             tp_size=tp_size,
