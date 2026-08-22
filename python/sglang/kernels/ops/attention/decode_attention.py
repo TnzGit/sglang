@@ -23,6 +23,7 @@ It supports page size = 1.
 import logging
 from typing import NamedTuple, Optional, Tuple
 
+import torch
 import triton
 import triton.language as tl
 
