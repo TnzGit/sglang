@@ -462,9 +462,11 @@ def _decode_att_m_fwd(
     elif (not _is_hip) and torch.cuda.get_device_capability()[0] <= 7:
         # Turing/Volta (cc 7.x): 64 KB shared-memory limit. 64-wide K/V
         # tiles at head_dim 256 with the 2-stage pipeline need ~128 KB;
-        # 16 keeps every supported head dim within budget. Throughput
-        # retuning for this port happens later.
-        BLOCK = 16
+        # 16 keeps every supported head dim within budget. Env-overridable
+        # for the port's tile sweep.
+        import os as _os
+
+        BLOCK = int(_os.getenv("SGLANG_TURING_DECODE_BLOCK", "16"))
     MAX_KV_SPLITS = max_kv_splits
     Lk = k_buffer.shape[-1]
     Lv = v_buffer.shape[-1]
@@ -807,7 +809,9 @@ def _decode_grouped_att_m_fwd(
 
     # Turing/Volta (cc 7.x): 64 KB shared-memory limit; halve the tile.
     if (not _is_hip) and torch.cuda.get_device_capability()[0] <= 7:
-        BLOCK = 16
+        import os as _os
+
+        BLOCK = int(_os.getenv("SGLANG_TURING_GROUPED_BLOCK", "16"))
         # NOTE: MLA-scale split dims (Lk > 288, e.g. 512+64) still exceed the
         # 64 KB ceiling at BLOCK=16 even with num_stages=1 (~68 KB required).
         # Those configs raise OutOfResources; MLA models are not a supported
@@ -849,7 +853,9 @@ def _decode_grouped_att_m_fwd(
     elif torch.cuda.get_device_capability()[0] <= 7:
         # Turing/Volta (cc 7.x): 64 KB smem. With BLOCK=16 the 2-stage
         # pipeline still needs ~68 KB at D=576 (512+64 split dims).
-        num_stages = 1
+        import os as _os
+
+        num_stages = int(_os.getenv("SGLANG_TURING_GROUPED_STAGES", "1"))
 
     if tune_mla:
         # num_warps reorders the fp32 accumulation, so whoever declined the batch-wide
