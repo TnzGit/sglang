@@ -307,6 +307,23 @@ is_sm80_supported = lru_cache(maxsize=1)(
         _check_cuda_device_version, device_capability_majors=[8], cuda_version=(11, 0)
     )
 )
+
+
+@lru_cache(maxsize=1)
+def is_sm75_supported() -> bool:
+    """Turing (RTX 20xx) support gate for the turing-sm75 port.
+
+    True on any CUDA device with compute capability >= (7, 5). Kernels that
+    genuinely require sm80+ hardware features are gated separately; this only
+    marks the architecture as a supported *target* (Triton attention, JIT
+    kernels, the SM75 sgl-kernel build, weight-only Marlin int4).
+    """
+    if not is_cuda():
+        return False
+    major, minor = torch.cuda.get_device_capability()
+    return (major, minor) >= (7, 5)
+
+
 is_sm90_supported = lru_cache(maxsize=1)(
     partial(
         _check_cuda_device_version, device_capability_majors=[9], cuda_version=(12, 3)

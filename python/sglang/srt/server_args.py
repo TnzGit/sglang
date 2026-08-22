@@ -89,6 +89,7 @@ from sglang.srt.utils.common import (
     is_no_spec_infer_or_topk_one,
     is_npu,
     is_remote_url,
+    is_sm75_supported,
     is_sm90_supported,
     is_sm100_or_sm110_supported,
     is_sm100_supported,
@@ -5940,8 +5941,12 @@ class ServerArgs:
                 return "aiter"
             elif is_mps():
                 return "torch_native"
+            elif is_sm75_supported():
+                # Turing: FlashInfer's SM75 support covers BatchDecode only
+                # (BatchPrefill has no 7.5 backend) and the FA extensions are
+                # not built for SM75. Triton attention is the validated route.
+                return "triton"
             else:
-                # FlashInfer does not support attention sinks.
                 if is_flashinfer_available() and not model_config.has_attention_sinks:
                     return "flashinfer"
                 return "triton"

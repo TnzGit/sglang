@@ -91,8 +91,16 @@ def query_marlin_supported_quant_types(
         capability = major * 10 + minor
         device_capability = -1 if capability is None else capability
 
-    if device_capability < 80:
+    if device_capability < 75:
         return []
+
+    # Turing (75 <= cc < 80): the gptq-marlin JIT kernel compiles for the
+    # local architecture, but only the integer W4 paths are validated there.
+    # FP8/FP4 marlin variants stay gated to sm80+ until proven on target
+    # hardware, so force include_fp_type off on Turing.
+    turing_int_only = device_capability < 80
+    if turing_int_only:
+        include_fp_type = False
 
     # - has_zp is True: return quant_types that has zero points
     # - has_zp is False: return quant_types that has not zero points

@@ -43,11 +43,15 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
    */
   m.def("merge_state_v2(Tensor v_a, Tensor s_a, Tensor v_b, Tensor s_b, Tensor! v_merged, Tensor! s_merged) -> ()");
   m.impl("merge_state_v2", torch::kCUDA, &merge_state_v2);
+#ifndef SGL_KERNEL_ENABLE_SM75
+  // cutlass MLA decode targets SM90+/SM100 cutlass FMHA collectives; pruned
+  // from the Turing build (attention goes through Triton/JIT paths there).
   m.def(
       "cutlass_mla_decode(Tensor! out, Tensor q_nope, Tensor q_pe, Tensor kv_c_and_k_pe_cache, Tensor seq_lens, Tensor "
       "page_table, Tensor! workspace, float sm_scale, int num_kv_splits) -> ()");
   m.impl("cutlass_mla_decode", torch::kCUDA, &cutlass_mla_decode);
   m.def("cutlass_mla_get_workspace_size", &cutlass_mla_get_workspace_size);
+#endif
 
   /*
    * From csrc/infllm_v2
@@ -118,10 +122,14 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "bias) -> Tensor");
   m.impl("int8_scaled_mm", torch::kCUDA, &int8_scaled_mm);
 
+#ifndef SGL_KERNEL_ENABLE_SM75
+  // fp8_scaled_mm dispatches to cutlass sm89/sm100 scaled-MM collectives;
+  // Turing has no fp8 tensor cores, so the binding is pruned there.
   m.def(
       "fp8_scaled_mm(Tensor mat_a, Tensor mat_b, Tensor scales_a, Tensor scales_b, ScalarType out_dtype, Tensor? "
       "bias) -> Tensor");
   m.impl("fp8_scaled_mm", torch::kCUDA, &fp8_scaled_mm);
+#endif
 
   m.def(
       "sgl_per_token_group_quant_8bit(Tensor input, Tensor! output_q, Tensor! output_s, int group_size,"
@@ -223,6 +231,8 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   /*
    * From csrc/moe/cutlass_moe/w4a8
    */
+#ifndef SGL_KERNEL_ENABLE_SM75
+  // cutlass w4a8 grouped MM requires SM90 cutlass 3.x collectives.
   m.def(
       "get_cutlass_w4a8_moe_mm_data(Tensor topk_ids, Tensor! expert_offsets, "
       "                        Tensor! problem_sizes1, Tensor! problem_sizes2, "
@@ -238,6 +248,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "               Tensor b_strides, Tensor d_strides, Tensor s_strides,"
       "               int chunk_size, int topk) -> ()");
   m.impl("cutlass_w4a8_moe_mm", torch::kCUDA, &cutlass_w4a8_moe_mm);
+#endif
 
   /*
    * From csrc/speculative
@@ -356,6 +367,9 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   /*
    * From Sparse Flash Attention
    */
+#ifndef SGL_KERNEL_ENABLE_SM75
+  // Sparse-FA2 kernels are sm80-only sources (cp.async); pruned from the
+  // Turing build. The vertical-slash index utils below stay available.
   m.def(
       "fwd_sparse(Tensor! q, Tensor k, Tensor v, "
       "Tensor block_count, Tensor block_offset, Tensor column_count, Tensor column_index, "
@@ -374,6 +388,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "bool is_causal, float softcap, bool return_softmax, "
       "Generator? gen) -> Tensor[]");
   m.impl("varlen_fwd_sparse", torch::kCUDA, &flash::mha_varlen_fwd_sparse);
+#endif
 
   // Sparse Attention utils
   m.def(
@@ -465,6 +480,8 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   /*
    * From csrc/expert_sepcialization
    */
+#ifndef SGL_KERNEL_ENABLE_SM75
+  // Expert-specialization fp8-blockwise / sm100 mxfp8 grouped MM kernels.
   m.def(
       "es_fp8_blockwise_scaled_grouped_mm(Tensor output, Tensor a, Tensor b, Tensor scales_a, Tensor scales_b, Tensor "
       "stride_a, Tensor stride_b, Tensor stride_d, Tensor problem_sizes, Tensor expert_offsets, Tensor workspace) -> "
@@ -478,6 +495,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "es_sm100_mxfp8_blockscaled_grouped_quant(Tensor input, Tensor problem_sizes, Tensor expert_offsets, Tensor "
       "blockscale_offsets, Tensor quant_output, Tensor scale_factor) -> () ");
   m.impl("es_sm100_mxfp8_blockscaled_grouped_quant", &es_sm100_mxfp8_blockscaled_grouped_quant);
+#endif
 }
 
 REGISTER_EXTENSION(common_ops)

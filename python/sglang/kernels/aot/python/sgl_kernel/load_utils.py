@@ -60,6 +60,11 @@ def _load_architecture_specific_ops():
     if compute_capability == 90:
         ops_subdir = "sm90"
         variant_name = "SM90 (Hopper/H100 with fast math optimization)"
+    elif compute_capability == 75:
+        # Turing wheel built with SGL_KERNEL_ENABLE_SM75: a single
+        # precise-math common_ops carrying compute_75 SASS only.
+        ops_subdir = "sm75"
+        variant_name = "SM75 (Turing, precise math)"
     elif compute_capability is not None:
         ops_subdir = "sm100"
         variant_name = f"SM{compute_capability} (precise math for compatibility)"

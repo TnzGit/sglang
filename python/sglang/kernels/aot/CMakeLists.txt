@@ -124,7 +124,6 @@ set(SGL_KERNEL_CUDA_FLAGS
     "-O3"
     "-Xcompiler"
     "-fPIC"
-    "-gencode=arch=compute_90,code=sm_90"
     "-std=c++17"
     "-DFLASHINFER_ENABLE_F16"
     "-DCUTE_USE_PACKED_TUPLE=1"
@@ -177,6 +176,21 @@ option(SGL_KERNEL_ENABLE_FA3              "Enable FA3"              ${DEFAULT_SG
 option(SGL_KERNEL_ENABLE_FA3_SPARSE_MASK  "Enable FA3 sparse mask kernels" OFF)
 option(SGL_KERNEL_ENABLE_SM90A            "Enable SM90A"            OFF)
 option(SGL_KERNEL_ENABLE_SM100A           "Enable SM100A"           OFF)
+option(SGL_KERNEL_ENABLE_SM75             "Turing (SM75) build: target compute_75 and prune sm89+/sm90+/sm100+-only sources (cutlass fp8/w4a8 grouped MM, cutlass MLA, expert-specialization mxfp8, sparse-FA2)" OFF)
+
+if (SGL_KERNEL_ENABLE_SM75)
+    # These paths have no Turing-compilable instantiation.
+    set(SGL_KERNEL_ENABLE_FA3 OFF)
+    set(SGL_KERNEL_ENABLE_FP4 OFF)
+    set(SGL_KERNEL_ENABLE_SM100A OFF)
+    # Primary gencode for the Turing build. The sm_80/89/90/10x appends below
+    # are skipped so every library in this wheel carries only compute_75 SASS.
+    list(APPEND SGL_KERNEL_CUDA_FLAGS "-gencode=arch=compute_75,code=sm_75")
+    # Visible to common_extension.cc (host C++) so pruned bindings stay off.
+    add_compile_definitions(SGL_KERNEL_ENABLE_SM75)
+else()
+    list(APPEND SGL_KERNEL_CUDA_FLAGS "-gencode=arch=compute_90,code=sm_90")
+endif()
 
 if (SGL_KERNEL_ENABLE_BF16)
     list(APPEND SGL_KERNEL_CUDA_FLAGS
@@ -192,7 +206,7 @@ if (SGL_KERNEL_ENABLE_FP8)
     )
 endif()
 
-if (ENABLE_BELOW_SM90)
+if (ENABLE_BELOW_SM90 AND NOT SGL_KERNEL_ENABLE_SM75)
     list(APPEND SGL_KERNEL_CUDA_FLAGS
         "-gencode=arch=compute_80,code=sm_80"
         "-gencode=arch=compute_89,code=sm_89"
@@ -205,7 +219,7 @@ if (ENABLE_BELOW_SM90)
 
 endif()
 
-if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_SM100A)
+if (NOT SGL_KERNEL_ENABLE_SM75 AND ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_SM100A))
     # sm_100f is available in CUDA 12.9+ and covers all sm_100, sm_103, sm_107, sm_10x
     if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.9")
         list(APPEND SGL_KERNEL_CUDA_FLAGS
@@ -313,6 +327,30 @@ set(SOURCES
     "${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/flash_sparse_api.cpp"
 )
 
+if (SGL_KERNEL_ENABLE_SM75)
+    # Turing build: drop sources whose kernels require sm89+/sm90+/sm100+
+    # hardware features (cutlass fp8 scaled-MM, cutlass 3.x w4a8 grouped MM,
+    # cutlass MLA decode, expert-specialization mxfp8, sparse-FA2 sm80
+    # cp.async kernels). Their pybind registrations in common_extension.cc
+    # are guarded by the same SGL_KERNEL_ENABLE_SM75 define.
+    foreach(_turing_prune
+            "csrc/attention/cutlass_mla_kernel.cu"
+            "csrc/gemm/fp8_gemm_kernel.cu"
+            "csrc/moe/cutlass_moe/w4a8/scaled_mm_entry.cu"
+            "csrc/moe/cutlass_moe/w4a8/w4a8_moe_data.cu"
+            "csrc/moe/cutlass_moe/w4a8/w4a8_grouped_mm_c3x.cu"
+            "csrc/expert_specialization/es_fp8_blockwise.cu"
+            "csrc/expert_specialization/es_sm100_mxfp8_blockscaled.cu"
+            "csrc/expert_specialization/es_sm100_mxfp8_blockscaled_group_quant.cu"
+            "${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/src/flash_fwd_sparse_hdim128_bf16_causal_sm80.cu"
+            "${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/src/flash_fwd_sparse_hdim128_bf16_sm80.cu"
+            "${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/src/flash_fwd_sparse_hdim128_fp16_causal_sm80.cu"
+            "${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/src/flash_fwd_sparse_hdim128_fp16_sm80.cu"
+            "${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/flash_sparse_api.cpp")
+        list(REMOVE_ITEM SOURCES "${_turing_prune}")
+    endforeach()
+endif()
+
 set(INCLUDES
     ${repo-cutlass_SOURCE_DIR}/include
     ${repo-cutlass_SOURCE_DIR}/tools/util/include
@@ -325,6 +363,7 @@ set(INCLUDES
 
 # =========================== Common SM90 Build ============================= #
 # Build SM90 library with fast math optimization (same namespace, different directory)
+if(NOT SGL_KERNEL_ENABLE_SM75)
 Python_add_library(common_ops_sm90_build MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
 
 target_compile_options(common_ops_sm90_build PRIVATE
@@ -336,6 +375,7 @@ set_target_properties(common_ops_sm90_build PROPERTIES
     OUTPUT_NAME "common_ops"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sm90"
 )
+endif()
 
 # =========================== Common SM100+ Build ============================= #
 # Build SM100+ library with precise math (same namespace, different directory)
@@ -367,15 +407,19 @@ else()
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
 endif()
 
+if(NOT SGL_KERNEL_ENABLE_SM75)
 target_link_libraries(common_ops_sm90_build PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
+endif()
 target_link_libraries(common_ops_sm100_build PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
 
 # sparse flash attention
+if(NOT SGL_KERNEL_ENABLE_SM75)
 target_compile_definitions(common_ops_sm90_build PRIVATE
     FLASHATTENTION_DISABLE_BACKWARD
     FLASHATTENTION_DISABLE_DROPOUT
     FLASHATTENTION_DISABLE_UNEVEN_K
 )
+endif()
 target_compile_definitions(common_ops_sm100_build PRIVATE
     FLASHATTENTION_DISABLE_BACKWARD
     FLASHATTENTION_DISABLE_DROPOUT
@@ -385,8 +429,14 @@ target_compile_definitions(common_ops_sm100_build PRIVATE
 # Install to different subdirectories
 # CMake will find the built libraries in their respective LIBRARY_OUTPUT_DIRECTORY locations
 # and install them to the specified destinations
+if(NOT SGL_KERNEL_ENABLE_SM75)
 install(TARGETS common_ops_sm90_build LIBRARY DESTINATION sgl_kernel/sm90)
 install(TARGETS common_ops_sm100_build LIBRARY DESTINATION sgl_kernel/sm100)
+else()
+# Turing build: single (precise-math) common_ops, installed under sm75/ so
+# load_utils routes cc==75 to it.
+install(TARGETS common_ops_sm100_build LIBRARY DESTINATION sgl_kernel/sm75)
+endif()
 
 # ============================ Optional Install: FA3 ============================= #
 # set flash-attention sources file
@@ -490,6 +540,8 @@ endif()
 # vendored static_switch.h forces bf16 and dispatches headdim to {64, 128}
 # only). Backward kernels are intentionally omitted because SGLang only uses
 # these ops for inference.
+# Skipped on Turing: its instantiations are sm80 FA2 sources (cp.async).
+if(NOT SGL_KERNEL_ENABLE_SM75)
 set(INFLLM_FLASH_CUDA_FLAGS
     "-DNDEBUG"
     "-O3"
@@ -543,6 +595,7 @@ target_include_directories(infllm_ops PRIVATE
 find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
 target_link_libraries(infllm_ops PRIVATE ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY} c10 cuda)
 install(TARGETS infllm_ops LIBRARY DESTINATION "sgl_kernel")
+endif(NOT SGL_KERNEL_ENABLE_SM75)
 
 # Build spatial_ops as a separate, optional extension for green contexts
 set(SPATIAL_SOURCES
@@ -556,7 +609,9 @@ target_link_libraries(spatial_ops PRIVATE ${TORCH_LIBRARIES} c10 cuda)
 install(TARGETS spatial_ops LIBRARY DESTINATION sgl_kernel)
 
 # ============================ Extra Install: FLashMLA ============================= #
+if(NOT SGL_KERNEL_ENABLE_SM75)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/flashmla.cmake)
+endif()
 
 # ============================ Extra Install: triton kernels ============================= #
 install(DIRECTORY "${repo-triton_SOURCE_DIR}/python/triton_kernels/triton_kernels/"
