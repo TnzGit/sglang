@@ -66,6 +66,24 @@ def mamba2_state_dtype(config=None) -> Mamba2StateDType:
         "float16": torch.float16,
     }
     conv_dtype = dtype_map.get(envs.SGLANG_MAMBA_CONV_DTYPE.get(), torch.bfloat16)
+    if conv_dtype == torch.bfloat16:
+        # Pre-sm80 devices have no bf16 hardware path (sglang forces fp16
+        # compute/weights there); keep GDN conv states in the activation
+        # dtype so kernels and index_put stay single-dtype. Applies to both
+        # the default and an explicit bfloat16 request.
+        try:
+            if (
+                torch.cuda.is_available()
+                and torch.cuda.get_device_capability()[0] < 8
+            ):
+                logger.warning(
+                    "GDN conv states requested as bfloat16, but pre-sm80 "
+                    "devices run fp16 compute; coercing conv states to "
+                    "float16."
+                )
+                conv_dtype = torch.float16
+        except Exception:
+            pass
 
     # Get SSM dtype: default -> config -> env var
     ssm_dtype = torch.float32  # Step 1: Default value
