@@ -1453,7 +1453,20 @@ def pre_capture_activation_reserve_mb(gpu_mem: float | None) -> float:
             running_requests * (get_spec().speculative_num_draft_tokens or 1), 2048
         )
     elif schedule.chunked_prefill_size > 0:
-        activation_tokens = max(schedule.chunked_prefill_size, 2048)
+        # Pre-sm80 (Turing): no bf16 hardware path, typically 22 GB cards —
+        # halve the floor so a usable KV budget remains on those GPUs.
+        min_activation_tokens = 1024
+        try:
+            import torch  # noqa: PLC0415
+
+            if (
+                not torch.cuda.is_available()
+                or torch.cuda.get_device_capability()[0] >= 8
+            ):
+                min_activation_tokens = 2048
+        except Exception:
+            min_activation_tokens = 2048
+        activation_tokens = max(schedule.chunked_prefill_size, min_activation_tokens)
     else:
         activation_tokens = max(schedule.max_prefill_tokens, 2048)
     reserved_mem = (
