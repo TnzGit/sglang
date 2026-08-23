@@ -367,6 +367,12 @@ class DFlashMLP(nn.Module):
 
 @torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
 def _grouped_conv(hidden_states, delta, base, block_size, num_groups, group_size, taps):
+    # Pre-sm80 port: accumulate in fp32 — the fp16 pipeline can overflow the
+    # coefficient*activation products here (inf-inf -> NaN downstream).
+    in_dtype = hidden_states.dtype
+    hidden_states = hidden_states.float()
+    delta = delta.float()
+    base = base.float()
     blocks = hidden_states.unflatten(-1, (num_groups, group_size))
     coefficients = base.view(1, taps, num_groups, group_size) + delta.unsqueeze(-1)
     out = coefficients[:, 0] * blocks
@@ -378,7 +384,7 @@ def _grouped_conv(hidden_states, delta, base, block_size, num_groups, group_size
     for tap in range(1, taps):
         shifted = F.pad(blocks[:-tap], (0, 0, 0, 0, tap, 0))
         out = out + coefficients[:, tap] * shifted * (position >= tap).view(-1, 1, 1)
-    return out.flatten(-2)
+    return out.flatten(-2).to(in_dtype)
 
 
 class DFlashGroupedConv(nn.Module):
@@ -662,6 +668,22 @@ class DFlashDraftModel(nn.Module):
             hidden_states, residual = layer(
                 positions, hidden_states, forward_batch, residual
             )
+            # Pre-sm80 port: stop NaN propagation at each boundary so one
+            # bad element cannot poison the whole block.
+            if hidden_states.numel() != 0:
+                bad = torch.isnan(hidden_states).any() or torch.isinf(
+                    hidden_states
+                ).any()
+                if bad:
+                    hidden_states = torch.nan_to_num(
+                        hidden_states, nan=0.0, posinf=60000.0, neginf=-60000.0
+                    )
+                if residual is not None and (
+                    torch.isnan(residual).any() or torch.isinf(residual).any()
+                ):
+                    residual = torch.nan_to_num(
+                        residual, nan=0.0, posinf=60000.0, neginf=-60000.0
+                    )
 
         if hidden_states.numel() != 0:
             if residual is None:
