@@ -675,6 +675,16 @@ class DFlashDraftModel(nn.Module):
                     hidden_states
                 ).any()
                 if bad:
+                    import logging as _dl
+
+                    _dl.getLogger(__name__).warning(
+                        "DFLASHDBG LAYER-OUT: nan%%=%.4f inf%%=%.4f "
+                        "absmax=%.1f norm=%.3f",
+                        float(torch.isnan(hidden_states.float()).float().mean()),
+                        float(torch.isinf(hidden_states.float()).float().mean()),
+                        float(hidden_states.float().abs().max()),
+                        float(hidden_states.float().norm()),
+                    )
                     hidden_states = torch.nan_to_num(
                         hidden_states, nan=0.0, posinf=60000.0, neginf=-60000.0
                     )
