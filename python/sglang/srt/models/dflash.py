@@ -21,6 +21,7 @@ from sglang.srt.layers.linear import (
     ColumnParallelLinear,
     MergedColumnParallelLinear,
     QKVParallelLinear,
+    ReplicatedLinear,
     RowParallelLinear,
 )
 from sglang.srt.layers.logits_processor import (
@@ -598,9 +599,24 @@ class DFlashDraftModel(nn.Module):
         num_context_features = len(target_layer_ids)
 
         self.num_context_features = int(num_context_features)
-        self.fc = nn.Linear(
-            self.num_context_features * hidden_size, hidden_size, bias=False
-        )
+        self._fc_in_features = int(self.num_context_features * hidden_size)
+        if quant_config is not None:
+            # Quantized drafts (e.g. W8A16 pack-quantized) ship fc as
+            # fc.weight_packed/weight_scale/weight_shape; it MUST go through
+            # the compressed-tensors linear so those names resolve. A plain
+            # nn.Linear here silently drops the trained weights and runs with
+            # random init (context features become noise, acceptance ~1.0x).
+            self.fc = ReplicatedLinear(
+                self.num_context_features * hidden_size,
+                hidden_size,
+                bias=False,
+                quant_config=quant_config,
+                prefix=f"{prefix}fc",
+            )
+        else:
+            self.fc = nn.Linear(
+                self.num_context_features * hidden_size, hidden_size, bias=False
+            )
         self.hidden_norm = RMSNorm(hidden_size, eps=rms_norm_eps)
 
     def set_block_size(self, block_size: int) -> None:
@@ -626,7 +642,7 @@ class DFlashDraftModel(nn.Module):
 
     def project_target_hidden(self, target_hidden: torch.Tensor) -> torch.Tensor:
         """Project concatenated target-layer hidden states into draft hidden_size."""
-        expected = int(self.fc.in_features)
+        expected = int(self._fc_in_features)
         if target_hidden.ndim != 2 or int(target_hidden.shape[-1]) != expected:
             raise ValueError(
                 "DFLASH target_hidden feature dim mismatch. "
@@ -636,7 +652,15 @@ class DFlashDraftModel(nn.Module):
                 "This usually means the target model is capturing a different number of layer features than "
                 "the draft checkpoint/config expects."
             )
-        return self.hidden_norm(self.fc(target_hidden))
+        # Target activations and the draft may disagree on dtype (e.g. the
+        # pre-sm80 fp32 draft cast); the projection must bridge them.
+        compute_dtype = self.hidden_norm.weight.dtype
+        if target_hidden.dtype != compute_dtype:
+            target_hidden = target_hidden.to(compute_dtype)
+        fc_out = self.fc(target_hidden)
+        if isinstance(fc_out, tuple):
+            fc_out = fc_out[0]
+        return self.hidden_norm(fc_out)
 
     @torch.no_grad()
     def forward(
@@ -740,6 +764,17 @@ class DFlashDraftModel(nn.Module):
                 return aliased_name
             return None
 
+        skipped: list[str] = []
+        _IGNORABLE_SKIPS = (
+            "embed_tokens",
+            "lm_head",
+            "rotary",
+            "inv_freq",
+            ".t2d",
+            ".d2t",
+        )
+        _QUANT_SUFFIXES = ("weight_packed", "weight_scale", "weight_shape")
+
         for name, loaded_weight in weights:
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if f".{weight_name}." not in name:
@@ -755,7 +790,7 @@ class DFlashDraftModel(nn.Module):
             else:
                 resolved_name = resolve_param_name(name)
                 if resolved_name is None:
-                    # Ignore unexpected weights (e.g., HF rotary caches).
+                    skipped.append(name)
                     continue
                 param = params_dict[resolved_name]
                 if resolved_name.endswith("fc.weight") and tuple(
@@ -770,6 +805,26 @@ class DFlashDraftModel(nn.Module):
                     )
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
+
+        if skipped:
+            bad = [
+                s
+                for s in skipped
+                if not any(k in s for k in _IGNORABLE_SKIPS)
+            ]
+            if any(any(q in s for q in _QUANT_SUFFIXES) for s in bad):
+                raise ValueError(
+                    "DFLASH draft checkpoint ships quantized weights the model "
+                    f"did not resolve (quant_config mismatch?): {bad[:8]}... "
+                    "Running with these silently missing would use random "
+                    "weights and destroy acceptance."
+                )
+            if bad:
+                logger.warning(
+                    "DFLASH draft load_weights skipped %d unresolved weights: %s",
+                    len(bad),
+                    bad[:12],
+                )
 
 
 class DFlashLagunaAttention(DFlashAttention):
@@ -843,7 +898,7 @@ class DFlashLagunaForCausalLM(DFlashDraftModel):
         return layer.input_layernorm(ctx_hidden)
 
     def project_target_hidden(self, target_hidden: torch.Tensor) -> torch.Tensor:
-        expected = int(self.fc.in_features)
+        expected = int(self._fc_in_features)
         if target_hidden.ndim != 2 or int(target_hidden.shape[-1]) != expected:
             raise ValueError(
                 "Laguna DFLASH target_hidden feature dim mismatch. "
@@ -855,14 +910,17 @@ class DFlashLagunaForCausalLM(DFlashDraftModel):
         num_slices = int(self.num_context_features)
         slice_size = int(target_hidden.shape[-1]) // num_slices
         slices = target_hidden.view(target_hidden.shape[0], num_slices, slice_size)
-        compute_dtype = self.fc.weight.dtype
+        compute_dtype = self.hidden_norm.weight.dtype
         if slices.dtype != compute_dtype:
             slices = slices.to(compute_dtype)
         normed = torch.empty_like(slices)
         for i, norm in enumerate(self.aux_hidden_norms):
             normed[:, i, :] = norm(slices[:, i, :])
         fused = normed.reshape(target_hidden.shape[0], -1)
-        return self.hidden_norm(self.fc(fused))
+        fc_out = self.fc(fused)
+        if isinstance(fc_out, tuple):
+            fc_out = fc_out[0]
+        return self.hidden_norm(fc_out)
 
 
 @torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)

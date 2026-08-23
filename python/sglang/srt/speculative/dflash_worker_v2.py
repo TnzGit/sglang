@@ -334,15 +334,20 @@ class DFlashWorkerV2(BaseSpecWorker):
         self._draft_sampler = None
         self.draft_model = bundle.draft_model
 
-        # Pre-sm80 port: cast the DFlash2 draft model to float32.
-        # The draft is small (~2GB bf16 -> ~4GB fp32) and its conv/selector
-        # operations overflow fp16 on Turing, producing NaN proposals.
+        # Optional pre-sm80 port knob: cast the DFlash2 draft model to float32.
+        # NOTE: the sm75 AOT kernel library has no fp32 rmsnorm dispatch, so
+        # this only works with eager fallback norms; default OFF restores the
+        # all-fp16 draft path (fp16 conv/selector overflow is mitigated by the
+        # layer-boundary activation clamps instead).
         try:
+            import os as _os_cast
+
             import torch as _t
 
             if (
                 _t.cuda.is_available()
                 and _t.cuda.get_device_capability()[0] < 8
+                and _os_cast.getenv("SGLANG_TURING_DFLASH_FP32_DRAFT", "") == "1"
             ):
                 self.draft_model.to(_t.float32)
                 import logging as _l
