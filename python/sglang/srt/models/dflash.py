@@ -358,10 +358,10 @@ class DFlashMLP(nn.Module):
         # channels of the heretic fine-tune; clamp the intermediate so the
         # down_proj output stays representable in fp16.
         if x.dtype == torch.float16:
-            x = x.clamp(-60000.0, 60000.0)
+            x = x.clamp(-30000.0, 30000.0)
         x, _ = self.down_proj(x)
         if x.dtype == torch.float16:
-            x = x.clamp(-60000.0, 60000.0)
+            x = x.clamp(-30000.0, 30000.0)
         return x
 
 
@@ -529,8 +529,8 @@ class DFlashDecoderLayer(nn.Module):
             and torch.cuda.is_available()
             and torch.cuda.get_device_capability()[0] < 8
         ):
-            hidden_states = hidden_states.clamp(-60000.0, 60000.0)
-            residual = residual.clamp(-60000.0, 60000.0)
+            hidden_states = hidden_states.clamp(-30000.0, 30000.0)
+            residual = residual.clamp(-30000.0, 30000.0)
         return hidden_states, residual
 
 
