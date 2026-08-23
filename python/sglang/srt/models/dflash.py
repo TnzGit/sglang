@@ -514,6 +514,17 @@ class DFlashDecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
         if mlp_kernel is not None:
             hidden_states = self.mlp_conv.finish(hidden_states, mlp_kernel)
+
+        # Pre-sm80 port: fp16 activations overflow on outlier channels of
+        # this fine-tune (inf - inf -> NaN in the residual add). Clamp both
+        # streams at every layer boundary so the poison cannot compound.
+        if (
+            hidden_states.dtype == torch.float16
+            and torch.cuda.is_available()
+            and torch.cuda.get_device_capability()[0] < 8
+        ):
+            hidden_states = hidden_states.clamp(-60000.0, 60000.0)
+            residual = residual.clamp(-60000.0, 60000.0)
         return hidden_states, residual
 
 
