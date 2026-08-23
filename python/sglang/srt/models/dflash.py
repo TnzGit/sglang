@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Iterable, Optional, Tuple
 
 import torch
@@ -259,7 +260,11 @@ class DFlashAttention(nn.Module):
         else:
             q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
             q, k = apply_qk_norm(q, k, self.q_norm, self.k_norm, self.head_dim)
-            q, k = self.rotary_emb(positions, q, k)
+            # The JIT/AOT rope registration is fp32-only; run the rotation in
+            # fp32 and cast back (rope is a negligible share of draft cost).
+            q32, k32 = q.float(), k.float()
+            q32, k32 = self.rotary_emb(positions, q32, k32)
+            q, k = q32.to(q.dtype), k32.to(k.dtype)
         import logging as _l
 
         _l.getLogger(__name__).warning(
@@ -316,9 +321,12 @@ class DFlashAttention(nn.Module):
 
     def apply_k_rope(self, positions: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
         # Match K shape so RoPE kernel head-count check passes on all backends.
-        dummy_q = k.new_empty(k.shape)
-        _, k = self.rotary_emb(positions, dummy_q, k)
-        return k
+        # fp32 domain for the JIT/AOT rope registration; cast back after.
+        dt = k.dtype
+        k32 = k.float()
+        dummy_q = k32.new_empty(k32.shape)
+        _, k32 = self.rotary_emb(positions, dummy_q, k32)
+        return k32.to(dt)
 
 
 class DFlashMLP(nn.Module):
@@ -692,6 +700,20 @@ class DFlashDraftModel(nn.Module):
             hidden_states, residual = layer(
                 positions, hidden_states, forward_batch, residual
             )
+            dump_dir = os.getenv("SGLANG_TURING_DFLASH_DUMP_DIR", "")
+            if dump_dir and hidden_states.numel() != 0:
+                n = getattr(self, "_p8_layer_n", 0)
+                if n < 20:
+                    torch.save(
+                        {
+                            "hidden": hidden_states.float().cpu(),
+                            "residual": residual.float().cpu()
+                            if residual is not None
+                            else None,
+                        },
+                        os.path.join(dump_dir, f"layer_{n:03d}.pt"),
+                    )
+                self._p8_layer_n = n + 1
             # Pre-sm80 port: stop NaN propagation at each boundary so one
             # bad element cannot poison the whole block.
             if hidden_states.numel() != 0:

@@ -334,28 +334,57 @@ class DFlashWorkerV2(BaseSpecWorker):
         self._draft_sampler = None
         self.draft_model = bundle.draft_model
 
-        # Optional pre-sm80 port knob: cast the DFlash2 draft model to float32.
-        # NOTE: the sm75 AOT kernel library has no fp32 rmsnorm dispatch, so
-        # this only works with eager fallback norms; default OFF restores the
-        # all-fp16 draft path (fp16 conv/selector overflow is mitigated by the
-        # layer-boundary activation clamps instead).
+        # Pre-sm80 draft dtype resolution. The DFlash2 checkpoints are
+        # bf16-native and their activations legitimately exceed the fp16 max
+        # (~65504): running the draft in fp16 overflows, NaN-poisons layer
+        # outputs and collapses acceptance. Default to bfloat16 (correct on
+        # sm75 via CUDA-core/Triton bf16 paths); float32 remains available,
+        # float16 reproduces the old broken behavior.
         try:
             import os as _os_cast
 
             import torch as _t
 
-            if (
-                _t.cuda.is_available()
-                and _t.cuda.get_device_capability()[0] < 8
-                and _os_cast.getenv("SGLANG_TURING_DFLASH_FP32_DRAFT", "") == "1"
-            ):
-                self.draft_model.to(_t.float32)
-                import logging as _l
+            if _t.cuda.is_available() and _t.cuda.get_device_capability()[0] < 8:
+                want = _os_cast.getenv(
+                    "SGLANG_TURING_DFLASH_DRAFT_DTYPE", "bfloat16"
+                ).lower()
+                dt = {
+                    "bfloat16": _t.bfloat16,
+                    "float32": _t.float32,
+                    "float16": _t.float16,
+                }.get(want)
+                if dt is not None:
+                    # Selective cast: compressed-tensors/marlin packed params
+                    # must stay in the dtype the quant kernels were built for
+                    # (fp16 on Turing); converting their scales corrupts the
+                    # dequant math. Everything dense follows the draft dtype.
+                    markers = (
+                        "weight_packed",
+                        "weight_scale",
+                        "weight_shape",
+                        "global_scale",
+                    )
+                    for name, prm in self.draft_model.named_parameters():
+                        if prm.dtype != dt and not any(m in name for m in markers):
+                            prm.data = prm.data.to(dt)
+                    # Rope kernels/caches stay fp32 regardless of the
+                    # activation dtype (the JIT rope registration is
+                    # fp32-only and half precision here buys nothing).
+                    import torch.nn as _nn
 
-                _l.getLogger(__name__).warning(
-                    "DFLASH pre-sm80: cast draft model to float32 for "
-                    "numerical stability (fp16 conv/selector overflow)."
-                )
+                    for _m in self.draft_model.modules():
+                        csc = getattr(_m, "cos_sin_cache", None)
+                        if isinstance(csc, _t.Tensor) and csc.dtype != _t.float32:
+                            _m.cos_sin_cache = csc.to(_t.float32)
+                    import logging as _l
+
+                    _l.getLogger(__name__).warning(
+                        "DFLASH pre-sm80: draft model cast to %s "
+                        "(SGLANG_TURING_DFLASH_DRAFT_DTYPE=%s).",
+                        want,
+                        want,
+                    )
         except Exception:
             pass
 
@@ -1438,6 +1467,22 @@ class DFlashWorkerV2(BaseSpecWorker):
         with torch.inference_mode():
             ctx_hidden = self.draft_model.project_target_hidden(target_hidden)
 
+        # P8 numeric-comparison dump (reference-harness workflow).
+        dump_dir = _os.getenv("SGLANG_TURING_DFLASH_DUMP_DIR", "")
+        if dump_dir:
+            n = getattr(self, "_p8_append_n", 0)
+            if n < 4:
+                torch.save(
+                    {
+                        "target_hidden": target_hidden.float().cpu(),
+                        "ctx_hidden": ctx_hidden.float().cpu(),
+                        "positions": positions.detach().cpu(),
+                    },
+                    _os.path.join(dump_dir, f"append_{n:03d}.pt"),
+                )
+            self._p8_append_n = n + 1
+
+        with torch.inference_mode():
             if cache_loc_2d is not None:
                 bs = int(commit_lens.shape[0])
                 if int(cache_loc_2d.shape[0]) != bs:
@@ -2004,6 +2049,20 @@ class DFlashWorkerV2(BaseSpecWorker):
             folded,
             self._draft_sampler is not None,
         )
+        dump_dir = _os.getenv("SGLANG_TURING_DFLASH_DUMP_DIR", "")
+        if dump_dir:
+            n = getattr(self, "_p8_fwd_n", 0)
+            if n < 4:
+                torch.save(
+                    {
+                        "block_ids": block_ids.detach().cpu(),
+                        "input_embeds": input_embeds.float().cpu(),
+                        "positions_q": positions_2d.detach().cpu(),
+                        "final_hidden": draft_logits_output.hidden_states.float().cpu(),
+                    },
+                    _os.path.join(dump_dir, f"fwd_{n:03d}.pt"),
+                )
+            self._p8_fwd_n = n + 1
         if folded:
             draft_next = self._draft_sampler.out[
                 : bs * (int(self.block_size) - 1)

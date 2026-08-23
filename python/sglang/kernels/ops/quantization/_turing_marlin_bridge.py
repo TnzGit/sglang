@@ -78,6 +78,14 @@ def turing_marlin_gemm(
     ops = require_vllm_ops()
     if c is None:
         c = torch.empty((size_m, size_n), dtype=a.dtype, device=a.device)
+    # Turing marlin only accepts fp16/int8 activations. The bf16 draft path
+    # (pre-sm80 DFlash2) produces bf16 inputs; every linear's input is a
+    # post-norm stream (small magnitude), so a fp16 round-trip is safe here.
+    out_dtype = None
+    if a.dtype == torch.bfloat16:
+        out_dtype = c.dtype
+        a = a.to(torch.float16)
+        c = torch.empty((size_m, size_n), dtype=torch.float16, device=a.device)
     # vLLM's compiled kernel requires the NVFP4 global scale in fp32; sglang
     # helpers may keep it in the activation dtype.
     if (
@@ -86,7 +94,7 @@ def turing_marlin_gemm(
         and global_scale.dtype != torch.float32
     ):
         global_scale = global_scale.to(torch.float32)
-    return ops.marlin_gemm(
+    out = ops.marlin_gemm(
         a,
         c,
         b_q_weight,
@@ -107,6 +115,10 @@ def turing_marlin_gemm(
         use_fp32_reduce,
         is_zp_float,
     )
+    if out_dtype is not None:
+        out = out.to(out_dtype)
+        c = out
+    return out
 
 
 def turing_gptq_marlin_repack(
