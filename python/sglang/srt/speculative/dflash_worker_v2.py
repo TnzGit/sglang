@@ -546,7 +546,9 @@ class DFlashWorkerV2(BaseSpecWorker):
         if lm_head is None:
             return _eager("no target lm_head")
 
-        if self.selector is not None:
+        if self.selector is not None and not _os.getenv(
+            "SGLANG_TURING_DFLASH_ARGMAX_DRAFT", ""
+        ):
             # compute_candidates needs the target lm_head attached before capture.
             # A gate-admitted quantized head is capture-safe: the target's own
             # logits path already runs the same kernel under CUDA graphs.
@@ -2011,7 +2013,9 @@ class DFlashWorkerV2(BaseSpecWorker):
                     self._draft_sampler.candidate_out[:bs],
                     self._draft_sampler.q_out[:bs],
                 )
-        elif self.selector is not None:
+        elif self.selector is not None and not _os.getenv(
+            "SGLANG_TURING_DFLASH_ARGMAX_DRAFT", ""
+        ):
             draft_next = self._propose_selector_block(
                 draft_logits_output=draft_logits_output,
                 bs=bs,
