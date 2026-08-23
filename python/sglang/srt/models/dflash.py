@@ -259,18 +259,21 @@ class DFlashAttention(nn.Module):
             q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
             q, k = apply_qk_norm(q, k, self.q_norm, self.k_norm, self.head_dim)
             q, k = self.rotary_emb(positions, q, k)
-        if getattr(self, "_dbg2", 0) < 2:
-            self._dbg2 = getattr(self, "_dbg2", 0) + 1
-            import logging as _l
+        import logging as _l
 
-            _l.getLogger(__name__).warning(
-                "DFLASHDBG attn: q %s nan%%=%.4f | k %s nan%%=%.4f",
-                tuple(q.shape),
-                float(torch.isnan(q.float()).float().mean()),
-                tuple(k.shape),
-                float(torch.isnan(k.float()).float().mean()),
-            )
+        _l.getLogger(__name__).warning(
+            "DFLASHDBG attn-pre n=%d: q nan%%=%.4f k nan%%=%.4f",
+            getattr(DFlashAttention, "_n", 0),
+            float(torch.isnan(q.float()).float().mean()),
+            float(torch.isnan(k.float()).float().mean()),
+        )
         attn_output = self.attn(q, k, v, forward_batch)
+        _l.getLogger(__name__).warning(
+            "DFLASHDBG attn-post n=%d: out nan%%=%.4f",
+            getattr(DFlashAttention, "_n", 0),
+            float(torch.isnan(attn_output.float()).float().mean()),
+        )
+        DFlashAttention._n = getattr(DFlashAttention, "_n", 0) + 1
         attn_output = self.apply_attention_output(attn_output, hidden_states)
         output, _ = self.o_proj(attn_output)
         return output
@@ -351,7 +354,14 @@ class DFlashMLP(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate_up, _ = self.gate_up_proj(x)
         x = self.act_fn(gate_up)
+        # Pre-sm80 port: fp16 activations can overflow to inf on outlier
+        # channels of the heretic fine-tune; clamp the intermediate so the
+        # down_proj output stays representable in fp16.
+        if x.dtype == torch.float16:
+            x = x.clamp(-60000.0, 60000.0)
         x, _ = self.down_proj(x)
+        if x.dtype == torch.float16:
+            x = x.clamp(-60000.0, 60000.0)
         return x
 
 
@@ -419,14 +429,14 @@ class DFlashGroupedConv(nn.Module):
     def prepare(self, hidden_states: torch.Tensor):
         import logging as _l
 
-        if getattr(self, "_dbg", 0) < 2:
-            self._dbg = getattr(self, "_dbg", 0) + 1
-            _l.getLogger(__name__).warning(
-                "DFLASHDBG conv-pre: hs %s nan%%=%.4f norm=%.3f",
-                tuple(hidden_states.shape),
-                float(torch.isnan(hidden_states.float()).float().mean()),
-                float(hidden_states.float().norm()),
-            )
+        _l.getLogger(__name__).warning(
+            "DFLASHDBG conv-pre n=%d: hs %s nan%%=%.4f norm=%.3f",
+            getattr(DFlashGroupedConv, "_n", 0),
+            tuple(hidden_states.shape),
+            float(torch.isnan(hidden_states.float()).float().mean()),
+            float(hidden_states.float().norm()),
+        )
+        DFlashGroupedConv._n = getattr(DFlashGroupedConv, "_n", 0) + 1
         coefficients = self.kernel_projection(hidden_states).reshape(
             *hidden_states.shape[:-1], 2, self.taps, self.num_groups
         )
