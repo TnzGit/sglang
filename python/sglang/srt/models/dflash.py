@@ -259,6 +259,17 @@ class DFlashAttention(nn.Module):
             q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
             q, k = apply_qk_norm(q, k, self.q_norm, self.k_norm, self.head_dim)
             q, k = self.rotary_emb(positions, q, k)
+        if getattr(self, "_dbg2", 0) < 2:
+            self._dbg2 = getattr(self, "_dbg2", 0) + 1
+            import logging as _l
+
+            _l.getLogger(__name__).warning(
+                "DFLASHDBG attn: q %s nan%%=%.4f | k %s nan%%=%.4f",
+                tuple(q.shape),
+                float(torch.isnan(q.float()).float().mean()),
+                tuple(k.shape),
+                float(torch.isnan(k.float()).float().mean()),
+            )
         attn_output = self.attn(q, k, v, forward_batch)
         attn_output = self.apply_attention_output(attn_output, hidden_states)
         output, _ = self.o_proj(attn_output)
@@ -406,6 +417,16 @@ class DFlashGroupedConv(nn.Module):
         )
 
     def prepare(self, hidden_states: torch.Tensor):
+        import logging as _l
+
+        if getattr(self, "_dbg", 0) < 2:
+            self._dbg = getattr(self, "_dbg", 0) + 1
+            _l.getLogger(__name__).warning(
+                "DFLASHDBG conv-pre: hs %s nan%%=%.4f norm=%.3f",
+                tuple(hidden_states.shape),
+                float(torch.isnan(hidden_states.float()).float().mean()),
+                float(hidden_states.float().norm()),
+            )
         coefficients = self.kernel_projection(hidden_states).reshape(
             *hidden_states.shape[:-1], 2, self.taps, self.num_groups
         )

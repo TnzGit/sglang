@@ -73,6 +73,8 @@ _is_npu = is_npu()
 
 logger = logging.getLogger(__name__)
 
+dflash_worker_dbg = type("_D", (), {})()
+
 _FusedKVMaterializeHelper = None
 
 
@@ -179,11 +181,40 @@ def _is_all_greedy(sampling_info) -> bool:
 
 
 def _selector_lattice(draft_model, pred_hidden, anchor_token_ids):
+    import os as _os
+
+    if _os.getenv("SGLANG_TURING_DFLASH_DEBUG") and getattr(
+        _selector_lattice, "_dbg", 0
+    ) < 2:
+        _selector_lattice._dbg = getattr(_selector_lattice, "_dbg", 0) + 1
+        import logging as _l
+
+        hs = pred_hidden.float()
+        _l.getLogger(__name__).warning(
+            "DFLASHDBG lattice: pred_hidden %s norm=%.3f per-pos-std=%s | "
+            "anchor=%s",
+            tuple(pred_hidden.shape),
+            hs.norm().item(),
+            [round(float(hs[:, i].std()), 4) for i in range(min(3, hs.shape[1]))],
+            str(anchor_token_ids[:2].tolist() if hasattr(anchor_token_ids,"tolist") else anchor_token_ids),
+        )
     # Flattened to [N, H] and viewed back because the radix top-k kernel is 2D.
     bs, num_pred = pred_hidden.shape[0], pred_hidden.shape[1]
     candidate_ids, unary_logits = draft_model.compute_candidates(
         pred_hidden.reshape(-1, pred_hidden.shape[-1])
     )
+    if _os.getenv("SGLANG_TURING_DFLASH_DEBUG") and getattr(
+        _selector_lattice, "_dbg2", 0
+    ) < 2:
+        _selector_lattice._dbg2 = getattr(_selector_lattice, "_dbg2", 0) + 1
+        import logging as _l
+
+        _l.getLogger(__name__).warning(
+            "DFLASHDBG lattice-out: cand %s sample=%s unary=[%.2f,%.2f]",
+            tuple(candidate_ids.shape),
+            candidate_ids.flatten()[:8].tolist(),
+            float(unary_logits.min()), float(unary_logits.max()),
+        )
     candidate_ids = candidate_ids.view(bs, num_pred, -1)
     return candidate_ids, draft_model.candidate_selector.build_lattice(
         candidate_ids=candidate_ids,
@@ -1297,6 +1328,19 @@ class DFlashWorkerV2(BaseSpecWorker):
         """
         if target_hidden is None:
             raise RuntimeError("DFLASH missing target hidden context features.")
+        import logging as _l
+
+        if getattr(self, "_mat_dbg", 0) < 2:
+            self._mat_dbg = getattr(self, "_mat_dbg", 0) + 1
+            th = target_hidden.float()
+            _l.getLogger(__name__).warning(
+                "DFLASHDBG materialize-in: %s norm=%.4f nan%%=%.4f "
+                "absmax=%.2f",
+                tuple(target_hidden.shape),
+                th.norm().item(),
+                float(torch.isnan(th).float().mean()),
+                th.abs().max().item(),
+            )
         if target_hidden.numel() == 0:
             return
         if target_hidden.ndim != 2:
@@ -1393,6 +1437,14 @@ class DFlashWorkerV2(BaseSpecWorker):
                         self._use_fused_kv_materialize = False
                         self._fused_kv_helper = None
 
+                import logging as _sl
+
+                _sl.getLogger(__name__).warning(
+                    "DFLASHDBG seq-path layers=%d ctx=%s nan%%=%.4f",
+                    len(self.draft_model.layers),
+                    tuple(ctx_hidden.shape),
+                    float(torch.isnan(ctx_hidden.float()).float().mean()),
+                )
                 for layer in self.draft_model.layers:
                     attn = layer.self_attn
                     layer_ctx_hidden = self.draft_model.prepare_context_hidden_for_kv(
@@ -1403,6 +1455,11 @@ class DFlashWorkerV2(BaseSpecWorker):
                     k = attn.apply_k_rope(positions, k)
                     k = k.view(-1, attn.num_kv_heads, attn.head_dim)
                     v = v.view(-1, attn.num_kv_heads, attn.head_dim)
+                    _sl.getLogger(__name__).warning(
+                        "DFLASHDBG seq-layer k nan%%=%.4f absmax=%.2f",
+                        float(torch.isnan(k.float()).float().mean()),
+                        float(k.float().abs().max()),
+                    )
 
                     self.draft_model_runner.token_to_kv_pool.set_kv_buffer_prefix_valid(
                         attn.attn,
@@ -1653,6 +1710,11 @@ class DFlashWorkerV2(BaseSpecWorker):
         on_publish=None,
         grammar_barrier=None,
     ) -> GenerationBatchResult:
+        import logging as _l
+
+        _l.getLogger(__name__).warning(
+            "DFLASHDBG fbg enter mode=%s n=%d", batch.forward_mode, len(batch.reqs)
+        )
         self._validate_phase1_sampling_support(batch)
 
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
@@ -1909,6 +1971,11 @@ class DFlashWorkerV2(BaseSpecWorker):
         draft_logits_output = draft_out.logits_output
 
         folded = self._draft_sampler is not None and draft_out.can_run_graph
+        _l.getLogger(__name__).warning(
+            "DFLASHDBG proposal path folded=%s sampler=%s",
+            folded,
+            self._draft_sampler is not None,
+        )
         if folded:
             draft_next = self._draft_sampler.out[
                 : bs * (int(self.block_size) - 1)
@@ -2016,6 +2083,17 @@ class DFlashWorkerV2(BaseSpecWorker):
         candidates = draft_tokens
         new_seq_lens = None
         target_predict = None
+        import logging as _dbg_l
+
+        if getattr(dflash_worker_dbg, "n", 0) < 4:
+            dflash_worker_dbg.n = getattr(dflash_worker_dbg, "n", 0) + 1
+            _dbg_l.warning(
+                "DFLASHDBG n=%d greedy=%s cand[0]=%s uniq=%d",
+                dflash_worker_dbg.n,
+                _is_all_greedy(sampling_info),
+                candidates[0].tolist(),
+                len(set(candidates[0].tolist())),
+            )
         if self._selector_sample is not None:
             selector_candidate_ids, selector_q_rows = self._selector_sample
             accept_len, bonus = self._selector_sampling_accept(
@@ -2042,6 +2120,22 @@ class DFlashWorkerV2(BaseSpecWorker):
             target_predict = torch.argmax(logits_output.next_token_logits, dim=-1).view(
                 bs, int(self.block_size)
             )
+            if _os.getenv("SGLANG_TURING_DFLASH_DEBUG") and self._dbg_steps < 3:
+                self._dbg_steps += 1
+                lg = logits_output.next_token_logits
+                hs = getattr(draft_input, "hidden_states", None)
+                logger.warning(
+                    "DFLASHDBG step=%d | logits shape=%s min=%.3f max=%.3f "
+                    "row0_top3=%s | proposals[0]=%s target[0]=%s | hs %s",
+                    self._dbg_steps,
+                    tuple(lg.shape),
+                    lg.min().item(), lg.max().item(),
+                    lg.view(-1, lg.shape[-1])[0].topk(3).indices.tolist(),
+                    candidates[0].tolist(),
+                    target_predict[0].tolist(),
+                    (tuple(hs.shape), float(hs.float().norm()),
+                     float(torch.isnan(hs).float().mean())) if hs is not None else None,
+                )
             if self._use_triton_accept_bonus:
                 try:
                     (

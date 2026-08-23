@@ -209,6 +209,14 @@ def _fused_norm_rope_stacked(
                 f"expected device={kv.device}, dtype={kv.dtype}."
             )
 
+    import logging as _l
+
+    _l.getLogger(__name__).warning(
+        "DFLASHDBG mat-pre: kv %s nan%%=%.4f absmax=%.2f",
+        tuple(kv.shape),
+        float(torch.isnan(kv.float()).float().mean()),
+        float(kv.float().abs().max()),
+    )
     _fused_norm_rope_kernel_stacked[(total_ctx, num_kv_heads, n_layers)](
         kv,
         k_norm_weight,
@@ -235,6 +243,14 @@ def _fused_norm_rope_stacked(
         rotary_dim,
         half_rotary_dim,
         BLOCK_HD,
+    )
+    import logging as _l
+
+    _l.getLogger(__name__).warning(
+        "DFLASHDBG mat-post: k_out nan%%=%.4f absmax=%.2f | v_out nan%%=%.4f",
+        float(torch.isnan(k_out.float()).float().mean()),
+        float(k_out.float().abs().max()),
+        float(torch.isnan(v_out.float()).float().mean()),
     )
     return k_out, v_out
 
