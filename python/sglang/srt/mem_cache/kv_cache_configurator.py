@@ -1788,7 +1788,24 @@ class KVCacheConfigurator:
         )
         rest_memory = available_gpu_memory - slack_gb - mm_reservation_gb
         if self.mambaish_config is not None:
+            pre_mamba_rest_gb = rest_memory
             rest_memory = self._handle_max_mamba_cache(rest_memory)
+            # A near-total squeeze here surfaces downstream as a useless KV
+            # pool (a few hundred tokens -> immediate "exceeds the maximum
+            # allowed length" 400s) instead of an error at this call site.
+            # Say so where the numbers are visible.
+            if rest_memory < 0.05 * pre_mamba_rest_gb:
+                logger.warning(
+                    "Hybrid state pools consumed %.2f of %.2f GB of the "
+                    "post-slack budget; only %.2f GB left for the KV cache. "
+                    "If the profiled max_total_tokens is too low: raise "
+                    "--mem-fraction-static, lower --max-mamba-cache-size, or "
+                    "set SGLANG_MAMBA_SSM_DTYPE=float16/bfloat16 to halve "
+                    "state bytes.",
+                    pre_mamba_rest_gb - rest_memory,
+                    pre_mamba_rest_gb,
+                    rest_memory,
+                )
 
         # Loaded weights (target + draft) can exceed the static budget
         if rest_memory <= 0:
@@ -2025,6 +2042,10 @@ class KVCacheConfigurator:
             assert get_spec().speculative_num_draft_tokens is not None
             assert get_schedule().max_running_requests is not None
 
+        # Spec-verify intermediate scratch charged against the KV budget below
+        # (0 when spec decoding is off or replayssm owns rollback). Kept as a
+        # named total so the budget-solve log can report the decomposition.
+        intermediate_memory_gb = 0.0
         if get_schedule().max_mamba_cache_size is not None:
             # Use explicitly set max_mamba_cache_size
             get_context().override(
@@ -2046,7 +2067,8 @@ class KVCacheConfigurator:
                     * (capped_reqs + 1)
                     * get_spec().speculative_num_draft_tokens
                 )
-                total_rest_memory = total_rest_memory - (intermediate_size / (1 << 30))
+                intermediate_memory_gb = intermediate_size / (1 << 30)
+                total_rest_memory -= intermediate_memory_gb
         elif (
             get_memory().disable_radix_cache
             and get_schedule().max_running_requests is not None
@@ -2065,7 +2087,8 @@ class KVCacheConfigurator:
                     * (get_schedule().max_mamba_cache_size + 1)
                     * get_spec().speculative_num_draft_tokens
                 )
-                total_rest_memory = total_rest_memory - (intermediate_size / (1 << 30))
+                intermediate_memory_gb = intermediate_size / (1 << 30)
+                total_rest_memory -= intermediate_memory_gb
         else:
             # Use ratio-based calculation to auto-fit available memory
             assert stage_per_req > 0
@@ -2099,7 +2122,8 @@ class KVCacheConfigurator:
                     get_schedule().max_mamba_cache_size // ratio,
                 )
                 intermediate_size = per_req * (capped_reqs + 1) * D
-                total_rest_memory = total_rest_memory - (intermediate_size / (1 << 30))
+                intermediate_memory_gb = intermediate_size / (1 << 30)
+                total_rest_memory -= intermediate_memory_gb
             else:
                 per_slot = per_req + replayssm_ring_per_req
                 get_context().override(
@@ -2133,7 +2157,22 @@ class KVCacheConfigurator:
             * (stage_per_req + replayssm_ring_per_req)
             / (1 << 30)
         )
-        return total_rest_memory - mamba_state_memory
+        # Breakdown of where the KV budget went: on tight hosts (small GPUs,
+        # spec decoding with large draft-token counts) the spec-intermediate
+        # scratch alone can approach the whole post-slack rest, which shows up
+        # downstream as a near-zero profiled max_total_tokens rather than an
+        # error here.
+        kv_budget_left = total_rest_memory - mamba_state_memory
+        logger.info(
+            "Mamba budget solve: slots=%d, per_req=%.1fMB, main_state=%.2fGB, "
+            "spec_intermediate=%.2fGB, kv_budget_left=%.2fGB",
+            get_schedule().max_mamba_cache_size,
+            stage_per_req / (1 << 20),
+            mamba_state_memory,
+            intermediate_memory_gb,
+            kv_budget_left,
+        )
+        return kv_budget_left
 
 
 def calculate_mla_kv_cache_dim(
