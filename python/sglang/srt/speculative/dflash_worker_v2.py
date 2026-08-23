@@ -1511,13 +1511,16 @@ class DFlashWorkerV2(BaseSpecWorker):
                         self._fused_kv_helper = None
 
                 import logging as _sl
+                import os as _os_dbg
 
-                _sl.getLogger(__name__).warning(
-                    "DFLASHDBG seq-path layers=%d ctx=%s nan%%=%.4f",
-                    len(self.draft_model.layers),
-                    tuple(ctx_hidden.shape),
-                    float(torch.isnan(ctx_hidden.float()).float().mean()),
-                )
+                _dbg = _os_dbg.getenv("SGLANG_TURING_DFLASH_DEBUG")
+                if _dbg:
+                    _sl.getLogger(__name__).warning(
+                        "DFLASHDBG seq-path layers=%d ctx=%s nan%%=%.4f",
+                        len(self.draft_model.layers),
+                        tuple(ctx_hidden.shape),
+                        float(torch.isnan(ctx_hidden.float()).float().mean()),
+                    )
                 for layer in self.draft_model.layers:
                     attn = layer.self_attn
                     layer_ctx_hidden = self.draft_model.prepare_context_hidden_for_kv(
@@ -1528,10 +1531,11 @@ class DFlashWorkerV2(BaseSpecWorker):
                     k = attn.apply_k_rope(positions, k)
                     k = k.view(-1, attn.num_kv_heads, attn.head_dim)
                     v = v.view(-1, attn.num_kv_heads, attn.head_dim)
-                    _sl.getLogger(__name__).warning(
-                        "DFLASHDBG seq-layer k nan%%=%.4f absmax=%.2f",
-                        float(torch.isnan(k.float()).float().mean()),
-                        float(k.float().abs().max()),
+                    if _dbg:
+                        _sl.getLogger(__name__).warning(
+                            "DFLASHDBG seq-layer k nan%%=%.4f absmax=%.2f",
+                            float(torch.isnan(k.float()).float().mean()),
+                            float(k.float().abs().max()),
                     )
 
                     self.draft_model_runner.token_to_kv_pool.set_kv_buffer_prefix_valid(

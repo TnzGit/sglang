@@ -265,21 +265,26 @@ class DFlashAttention(nn.Module):
             q32, k32 = q.float(), k.float()
             q32, k32 = self.rotary_emb(positions, q32, k32)
             q, k = q32.to(q.dtype), k32.to(k.dtype)
-        import logging as _l
+        if os.getenv("SGLANG_TURING_DFLASH_DEBUG"):
+            import logging as _l
 
-        _l.getLogger(__name__).warning(
-            "DFLASHDBG attn-pre n=%d: q nan%%=%.4f k nan%%=%.4f",
-            getattr(DFlashAttention, "_n", 0),
-            float(torch.isnan(q.float()).float().mean()),
-            float(torch.isnan(k.float()).float().mean()),
-        )
+            _l.getLogger(__name__).warning(
+                "DFLASHDBG attn-pre n=%d: q nan%%=%.4f k nan%%=%.4f",
+                getattr(DFlashAttention, "_n", 0),
+                float(torch.isnan(q.float()).float().mean()),
+                float(torch.isnan(k.float()).float().mean()),
+            )
+            DFlashAttention._n = getattr(DFlashAttention, "_n", 0) + 1
         attn_output = self.attn(q, k, v, forward_batch)
-        _l.getLogger(__name__).warning(
-            "DFLASHDBG attn-post n=%d: out nan%%=%.4f",
-            getattr(DFlashAttention, "_n", 0),
-            float(torch.isnan(attn_output.float()).float().mean()),
-        )
-        DFlashAttention._n = getattr(DFlashAttention, "_n", 0) + 1
+        if os.getenv("SGLANG_TURING_DFLASH_DEBUG"):
+            import logging as _l
+
+            _l.getLogger(__name__).warning(
+                "DFLASHDBG attn-post n=%d: out nan%%=%.4f",
+                getattr(DFlashAttention, "_n", 0),
+                float(torch.isnan(attn_output.float()).float().mean()),
+            )
+            DFlashAttention._n = getattr(DFlashAttention, "_n", 0) + 1
         attn_output = self.apply_attention_output(attn_output, hidden_states)
         output, _ = self.o_proj(attn_output)
         return output
@@ -442,16 +447,17 @@ class DFlashGroupedConv(nn.Module):
         )
 
     def prepare(self, hidden_states: torch.Tensor):
-        import logging as _l
+        if os.getenv("SGLANG_TURING_DFLASH_DEBUG"):
+            import logging as _l
 
-        _l.getLogger(__name__).warning(
-            "DFLASHDBG conv-pre n=%d: hs %s nan%%=%.4f norm=%.3f",
-            getattr(DFlashGroupedConv, "_n", 0),
-            tuple(hidden_states.shape),
-            float(torch.isnan(hidden_states.float()).float().mean()),
-            float(hidden_states.float().norm()),
-        )
-        DFlashGroupedConv._n = getattr(DFlashGroupedConv, "_n", 0) + 1
+            _l.getLogger(__name__).warning(
+                "DFLASHDBG conv-pre n=%d: hs %s nan%%=%.4f norm=%.3f",
+                getattr(DFlashGroupedConv, "_n", 0),
+                tuple(hidden_states.shape),
+                float(torch.isnan(hidden_states.float()).float().mean()),
+                float(hidden_states.float().norm()),
+            )
+            DFlashGroupedConv._n = getattr(DFlashGroupedConv, "_n", 0) + 1
         coefficients = self.kernel_projection(hidden_states).reshape(
             *hidden_states.shape[:-1], 2, self.taps, self.num_groups
         )
@@ -714,9 +720,14 @@ class DFlashDraftModel(nn.Module):
                         os.path.join(dump_dir, f"layer_{n:03d}.pt"),
                     )
                 self._p8_layer_n = n + 1
-            # Pre-sm80 port: stop NaN propagation at each boundary so one
-            # bad element cannot poison the whole block.
-            if hidden_states.numel() != 0:
+            # Pre-sm80 debug-era safety net: fp16 overflow no longer occurs on
+            # the default bf16 draft path, and the per-layer NaN checks force
+            # device syncs (illegal inside CUDA graph capture). Only pay for
+            # them when explicitly debugging.
+            if (
+                os.getenv("SGLANG_TURING_DFLASH_DEBUG")
+                and hidden_states.numel() != 0
+            ):
                 bad = torch.isnan(hidden_states).any() or torch.isinf(
                     hidden_states
                 ).any()
