@@ -2120,6 +2120,15 @@ class DFlashWorkerV2(BaseSpecWorker):
             target_predict = torch.argmax(logits_output.next_token_logits, dim=-1).view(
                 bs, int(self.block_size)
             )
+            if getattr(dflash_worker_dbg, "pair", 0) < 3:
+                dflash_worker_dbg.pair = getattr(dflash_worker_dbg, "pair", 0) + 1
+                import logging as _l2
+
+                _l2.getLogger(__name__).warning(
+                    "DFLASHDBG PAIR cand[0]=%s target[0]=%s",
+                    candidates[0].tolist(),
+                    target_predict[0].tolist(),
+                )
             if _os.getenv("SGLANG_TURING_DFLASH_DEBUG") and self._dbg_steps < 3:
                 self._dbg_steps += 1
                 lg = logits_output.next_token_logits

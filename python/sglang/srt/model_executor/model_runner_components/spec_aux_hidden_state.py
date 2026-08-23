@@ -159,6 +159,10 @@ def _resolve_dflash_aux_hidden_state(
             target_num_layers=int(target_num_layers),
             draft_num_layers=int(draft_num_layers),
         )
+        # DFlash's aux layer id semantics reference layer *inputs* ("the
+        # stream entering layer N"); capture the matching layer *outputs*,
+        # i.e. shift by +1 — mirrors vLLM's gpu_model_runner conversion.
+        target_layer_ids = [i + 1 for i in target_layer_ids]
 
         # These Muse drafts use HF layer-output ids, while the Muse target captures
         # before each layer. Legacy Muse drafts already store layer-input ids.
