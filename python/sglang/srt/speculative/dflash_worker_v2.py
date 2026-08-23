@@ -333,6 +333,27 @@ class DFlashWorkerV2(BaseSpecWorker):
         self.draft_model_runner = bundle.draft_model_runner
         self._draft_sampler = None
         self.draft_model = bundle.draft_model
+
+        # Pre-sm80 port: cast the DFlash2 draft model to float32.
+        # The draft is small (~2GB bf16 -> ~4GB fp32) and its conv/selector
+        # operations overflow fp16 on Turing, producing NaN proposals.
+        try:
+            import torch as _t
+
+            if (
+                _t.cuda.is_available()
+                and _t.cuda.get_device_capability()[0] < 8
+            ):
+                self.draft_model.to(_t.float32)
+                import logging as _l
+
+                _l.getLogger(__name__).warning(
+                    "DFLASH pre-sm80: cast draft model to float32 for "
+                    "numerical stability (fp16 conv/selector overflow)."
+                )
+        except Exception:
+            pass
+
         self.selector = self.draft_model.candidate_selector
         draft_config = parse_dflash_draft_config(
             draft_hf_config=self.draft_model_runner.model_config.hf_config
