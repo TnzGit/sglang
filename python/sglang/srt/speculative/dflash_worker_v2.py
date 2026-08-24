@@ -1387,7 +1387,9 @@ class DFlashWorkerV2(BaseSpecWorker):
             raise RuntimeError("DFLASH missing target hidden context features.")
         import logging as _l
 
-        if getattr(self, "_mat_dbg", 0) < 2:
+        if _os.getenv("SGLANG_TURING_DFLASH_DEBUG") and getattr(
+            self, "_mat_dbg", 0
+        ) < 2:
             self._mat_dbg = getattr(self, "_mat_dbg", 0) + 1
             th = target_hidden.float()
             _l.getLogger(__name__).warning(
@@ -1789,9 +1791,10 @@ class DFlashWorkerV2(BaseSpecWorker):
     ) -> GenerationBatchResult:
         import logging as _l
 
-        _l.getLogger(__name__).warning(
-            "DFLASHDBG fbg enter mode=%s n=%d", batch.forward_mode, len(batch.reqs)
-        )
+        if _os.getenv("SGLANG_TURING_DFLASH_DEBUG"):
+            _l.getLogger(__name__).warning(
+                "DFLASHDBG fbg enter mode=%s n=%d", batch.forward_mode, len(batch.reqs)
+            )
         self._validate_phase1_sampling_support(batch)
 
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
@@ -2048,11 +2051,12 @@ class DFlashWorkerV2(BaseSpecWorker):
         draft_logits_output = draft_out.logits_output
 
         folded = self._draft_sampler is not None and draft_out.can_run_graph
-        _l.getLogger(__name__).warning(
-            "DFLASHDBG proposal path folded=%s sampler=%s",
-            folded,
-            self._draft_sampler is not None,
-        )
+        if _os.getenv("SGLANG_TURING_DFLASH_DEBUG"):
+            _l.getLogger(__name__).warning(
+                "DFLASHDBG proposal path folded=%s sampler=%s",
+                folded,
+                self._draft_sampler is not None,
+            )
         dump_dir = _os.getenv("SGLANG_TURING_DFLASH_DUMP_DIR", "")
         if dump_dir:
             n = getattr(self, "_p8_fwd_n", 0)
@@ -2178,7 +2182,9 @@ class DFlashWorkerV2(BaseSpecWorker):
         target_predict = None
         import logging as _dbg_l
 
-        if getattr(dflash_worker_dbg, "n", 0) < 4:
+        if _os.getenv("SGLANG_TURING_DFLASH_DEBUG") and getattr(
+            dflash_worker_dbg, "n", 0
+        ) < 4:
             dflash_worker_dbg.n = getattr(dflash_worker_dbg, "n", 0) + 1
             _dbg_l.warning(
                 "DFLASHDBG n=%d greedy=%s cand[0]=%s uniq=%d",
@@ -2213,7 +2219,9 @@ class DFlashWorkerV2(BaseSpecWorker):
             target_predict = torch.argmax(logits_output.next_token_logits, dim=-1).view(
                 bs, int(self.block_size)
             )
-            if getattr(dflash_worker_dbg, "pair", 0) < 3:
+            if _os.getenv("SGLANG_TURING_DFLASH_DEBUG") and getattr(
+                dflash_worker_dbg, "pair", 0
+            ) < 3:
                 dflash_worker_dbg.pair = getattr(dflash_worker_dbg, "pair", 0) + 1
                 import logging as _l2
 
